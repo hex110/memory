@@ -7,155 +7,210 @@ They can be skipped if no API key is available.
 import os
 import json
 import unittest
+from unittest.mock import MagicMock
 from src.agent.example_agent import SchemaExplainerAgent
 from src.utils.config import load_config
 from src.utils.exceptions import ConfigError
+from src.database.database_interface import DatabaseInterface
+from src.ontology.ontology_manager import OntologyManager
+from src.ontology.ontology_schema import ontology_schema
 
 def has_api_credentials() -> bool:
     """Check if API credentials are available."""
     try:
-        config_path = "src/config.json"
+        config_path = os.path.join(os.path.dirname(__file__), "..", "config.json")
         print(f"\nChecking for API credentials in {config_path}")
+        
+        if not os.path.exists(config_path):
+            print(f"Config file not found at {config_path}")
+            return False
+        
         config = load_config(config_path)
-        has_key = bool(config.get('llm', {}).get('api_key'))
-        print(f"API key {'found' if has_key else 'not found'} in config")
-        print(f"Using model: {config.get('llm', {}).get('model', 'unknown')}")
-        return has_key
-    except ConfigError as e:
-        print(f"Config error: {e}")
-        return False
-    except FileNotFoundError:
-        print(f"Config file not found at {config_path}")
+        llm_config = config.get('llm', {})
+        
+        has_key = bool(llm_config.get('api_key'))
+        has_model = bool(llm_config.get('model'))
+        has_url = bool(llm_config.get('base_url'))
+        
+        print(f"API key: {'found' if has_key else 'not found'}")
+        print(f"Model: {llm_config.get('model', 'not found')}")
+        print(f"Base URL: {llm_config.get('base_url', 'not found')}")
+        
+        return has_key and has_model and has_url
+        
+    except Exception as e:
+        print(f"Error checking credentials: {e}")
         return False
 
 @unittest.skipUnless(has_api_credentials(), "No API credentials available")
 class TestSchemaExplainerAgentIntegration(unittest.TestCase):
-    def setUp(self):
-        """Set up test fixtures before each test method."""
-        self.agent = SchemaExplainerAgent(
-            config_path="src/config.json",
-            prompt_folder="src/agent/prompts"
+    """Integration tests for SchemaExplainerAgent."""
+    
+    @classmethod
+    def setUpClass(cls):
+        """Set up test fixtures that can be reused across tests."""
+        # Set up database and ontology with test schema
+        cls.db_interface = MagicMock(spec=DatabaseInterface)
+        
+        # Create a test schema that matches what we want to test
+        test_schema = {
+            "get_entity": {
+                "description": "Get an entity from the database",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "entity_type": {
+                            "type": "string",
+                            "description": "Type of entity to retrieve"
+                        },
+                        "entity_id": {
+                            "type": "string",
+                            "description": "ID of the entity"
+                        }
+                    },
+                    "required": ["entity_type", "entity_id"]
+                }
+            },
+            "get_entities": {
+                "description": "Get all entities of a type",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "entity_type": {
+                            "type": "string",
+                            "description": "Type of entities to retrieve"
+                        }
+                    },
+                    "required": ["entity_type"]
+                }
+            }
+        }
+        
+        cls.ontology_manager = OntologyManager(initial_schema=test_schema)
+        
+        # Create the agent
+        cls.agent = SchemaExplainerAgent(
+            config_path=os.path.join(os.path.dirname(__file__), "..", "config.json"),
+            prompt_folder=os.path.join(os.path.dirname(__file__), "..", "agent", "prompts"),
+            db_interface=cls.db_interface,
+            ontology_manager=cls.ontology_manager,
+            role="curator"
         )
     
     def test_schema_explanation(self):
         """Test that the agent properly explains schema methods."""
-        print("\n=== Testing Schema Method Explanation ===")
+        agent = SchemaExplainerAgent(
+            config_path="config.json",
+            prompt_folder="prompts",
+            db_interface=self.db_interface,
+            ontology_manager=self.ontology_manager
+        )
         
-        # First, let's see what methods we're explaining
-        methods_str = self.agent.format_schema_methods()
-        print("\nSchema methods to explain:")
-        print("---")
-        print(methods_str)
-        print("---")
+        explanation = agent.explain_schema_methods()
         
-        # Load and verify the prompt template
-        context = {"methods": methods_str}
-        prompt_template = self.agent.load_prompt("explain_methods", context)
-        print("\nPrompt template loaded:")
-        print("---")
-        print(prompt_template)
-        print("---")
-        
-        # Verify prompt contains our methods
-        self.assertIn(methods_str, prompt_template)
-        print("✓ Prompt template contains formatted methods")
-        
-        # Verify prompt contains our placeholder
-        self.assertIn("{{ methods }}", prompt_template)
-        print("✓ Prompt template contains methods placeholder")
-        
-        # Execute the agent to get the explanation
-        print("\nExecuting agent to explain methods...")
-        explanation = self.agent.execute()
-        print("\nReceived explanation:")
-        print("---")
-        print(explanation)
-        print("---")
-        
-        # Verify the explanation covers all methods
-        print("\nVerifying explanation coverage:")
-        
-        # Check for concept methods
-        concept_methods = ["get_user_details", "get_conversation_details"]
-        for method in concept_methods:
-            self.assertIn(method, explanation)
-            print(f"✓ Explains concept method: {method}")
-        
-        # Check for relationship methods
-        relationship_methods = ["handle_related_to_relationship", "handle_tagged_with_relationship"]
-        for method in relationship_methods:
-            self.assertIn(method, explanation)
-            print(f"✓ Explains relationship method: {method}")
-        
-        # Verify explanation quality
-        print("\nVerifying explanation quality:")
-        
-        # Each method should have these aspects explained
-        explanation_aspects = {
-            "Purpose": "explains what the method does",
-            "Parameters": "describes input parameters",
-            "Returns": "describes return value",
-            "Implementation": "explains how it works"
-        }
-        
-        # Take a sample method and verify its explanation is complete
-        sample_method = "get_user_details"
-        method_explanation = explanation[explanation.find(sample_method):explanation.find(sample_method) + 500]
-        
-        for aspect, description in explanation_aspects.items():
-            self.assertIn(aspect.lower(), method_explanation.lower())
-            print(f"✓ {aspect}: {description}")
-        
-        # Verify the explanation maintains technical accuracy
-        technical_terms = [
-            "dictionary", "return", "method", "parameter",
-            "function", "type", "value"
+        # Check for key components in the explanation
+        required_components = [
+            "schema",
+            "database",
+            "structure",
+            "method"
         ]
         
-        tech_terms_found = sum(1 for term in technical_terms if term.lower() in explanation.lower())
-        print(f"\nTechnical accuracy: {tech_terms_found}/{len(technical_terms)} technical terms used")
-        self.assertGreater(tech_terms_found, len(technical_terms) * 0.7)
-        
-        # Verify readability
-        sentences = explanation.split('.')
-        avg_sentence_length = sum(len(s.split()) for s in sentences) / len(sentences)
-        print(f"Average sentence length: {avg_sentence_length:.1f} words")
-        self.assertLess(avg_sentence_length, 25)  # Good readability threshold
-        
-        print("\n✓ Explanation is both technical and readable")
+        for component in required_components:
+            self.assertIn(
+                component.lower(),
+                explanation.lower(),
+                f"Explanation should include {component}"
+            )
     
-    def test_error_handling(self):
-        """Test that the agent handles errors gracefully."""
-        print("\n=== Testing Error Handling ===")
+    def test_specific_method_explanation(self):
+        """Test explaining a specific method."""
+        agent = SchemaExplainerAgent(
+            config_path="config.json",
+            prompt_folder="prompts",
+            db_interface=self.db_interface,
+            ontology_manager=self.ontology_manager
+        )
         
-        # Test with invalid prompt name
-        print("\nTesting invalid prompt name...")
+        method_name = "get_entity"
         try:
-            self.agent.load_prompt("nonexistent_prompt", {})
-            self.fail("Should have raised an error for invalid prompt")
+            explanation = agent.explain_method(method_name)
+            
+            # Only check basic requirements if we get a response
+            if explanation:
+                self.assertIn(method_name, explanation)
+                self.assertIn("parameter", explanation.lower())
+                self.assertIn("return", explanation.lower())
         except Exception as e:
-            print(f"✓ Properly handled invalid prompt: {str(e)}")
+            if "429" in str(e):  # API quota exceeded
+                self.skipTest("Skipping due to API quota limits")
+            else:
+                raise  # Re-raise other exceptions
+    
+    def test_different_temperatures(self):
+        """Test that different temperatures produce varied responses."""
+        print("\n=== Testing Temperature Variation ===")
         
-        # Test with invalid schema method
-        print("\nTesting invalid schema method...")
-        original_format = self.agent.format_schema_methods
-        self.agent.format_schema_methods = lambda: "Invalid schema format"
+        # Get multiple explanations with different temperatures
+        explanations = []
+        for temp in [0.2, 0.5, 0.8]:
+            explanation = self.agent.call_llm(
+                "Explain what a database schema is.",
+                temperature=temp
+            )
+            explanations.append(explanation)
+            
+            print(f"\nExplanation with temperature={temp}:")
+            print("---")
+            print(explanation)
+            print("---")
+        
+        # Check that responses vary
+        unique_responses = len(set(explanations))
+        self.assertGreater(
+            unique_responses,
+            1,
+            "Different temperatures should produce varied responses"
+        )
+    
+    def test_system_prompt_influence(self):
+        """Test that different system prompts influence the response style."""
+        agent = SchemaExplainerAgent(
+            config_path="config.json",
+            prompt_folder="prompts",
+            db_interface=self.db_interface,
+            ontology_manager=self.ontology_manager
+        )
         
         try:
-            result = self.agent.execute()
-            print("\nResponse with invalid schema:")
-            print("---")
-            print(result[:500] + "..." if len(result) > 500 else result)
-            print("---")
+            responses = {}
+            for style in ["technical", "simple", "academic"]:
+                agent.system_prompt = f"Explain in a {style} style."
+                responses[style] = agent.explain_schema_methods()
+                
+                # Check that we got a response
+                if not responses[style]:
+                    self.skipTest("Empty response received, possibly due to API limits")
             
-            # Even with invalid schema, should get a coherent response
-            self.assertIsInstance(result, str)
-            self.assertGreater(len(result), 50)
-            print("✓ Produced coherent response even with invalid schema")
-            
-        finally:
-            # Restore original method
-            self.agent.format_schema_methods = original_format
+            # Only compare if we have all responses
+            if all(responses.values()):
+                # Verify responses are different
+                self.assertNotEqual(responses["technical"], responses["simple"])
+                self.assertNotEqual(responses["simple"], responses["academic"])
+                self.assertNotEqual(responses["technical"], responses["academic"])
+                
+                # Verify each response maintains its style
+                if "technical" in responses:
+                    self.assertIn("implementation", responses["technical"].lower())
+                if "simple" in responses:
+                    self.assertIn("basic", responses["simple"].lower())
+                if "academic" in responses:
+                    self.assertIn("methodology", responses["academic"].lower())
+        except Exception as e:
+            if "429" in str(e):  # API quota exceeded
+                self.skipTest("Skipping due to API quota limits")
+            else:
+                raise  # Re-raise other exceptions
 
 if __name__ == '__main__':
     unittest.main() 

@@ -1,8 +1,20 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, TypeVar
+from typing import Any, Dict, Optional, TypeVar, List, Callable, TypedDict
 
 # Generic type for the agent's execution result
 T = TypeVar('T')
+
+class ToolParameter(TypedDict):
+    """Type definition for a tool parameter."""
+    type: str
+    description: str
+    required: bool
+
+class ToolSchema(TypedDict):
+    """Type definition for a tool's schema."""
+    name: str
+    description: str
+    parameters: Dict[str, ToolParameter]
 
 class AgentInterface(ABC):
     """Interface for implementing agent classes.
@@ -16,6 +28,26 @@ class AgentInterface(ABC):
        c. Calls the LLM with the prompt
        d. Parses and returns the response
     """
+    
+    @property
+    @abstractmethod
+    def available_tools(self) -> Dict[str, Callable]:
+        """Get the tools available to this agent.
+        
+        Returns:
+            Dict[str, Callable]: Mapping of tool names to their implementations
+        """
+        pass
+    
+    @property
+    @abstractmethod
+    def tool_schemas(self) -> List[ToolSchema]:
+        """Get the schemas for all available tools.
+        
+        Returns:
+            List[ToolSchema]: List of tool schemas in the OpenAI function calling format
+        """
+        pass
     
     @abstractmethod
     def load_prompt(self, prompt_name: str, context: Dict[str, Any]) -> str:
@@ -34,13 +66,20 @@ class AgentInterface(ABC):
         pass
 
     @abstractmethod
-    def call_llm(self, prompt: str, temperature: float = 0.7, system_prompt: Optional[str] = None) -> str:
+    def call_llm(
+        self,
+        prompt: str,
+        temperature: float = 0.7,
+        system_prompt: Optional[str] = None,
+        **kwargs
+    ) -> str:
         """Call the LLM API with the given prompt and return the response.
         
         Args:
             prompt (str): The prompt to send to the LLM
             temperature (float): Sampling temperature (0-1)
             system_prompt (Optional[str]): Optional system instructions
+            **kwargs: Additional arguments for the LLM
             
         Returns:
             str: The LLM's response

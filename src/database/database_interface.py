@@ -54,29 +54,29 @@ class DatabaseInterface(ABC):
         pass
 
     @abstractmethod
-    def insert(self, collection_name: str, data: Dict[str, Any], entity_id: Optional[str] = None) -> str:
-        """Inserts a new entity into a collection.
+    def add_entity(self, collection_name: str, entity_id: str, data: Dict[str, Any]) -> str:
+        """Add a new entity to a collection.
         
         Args:
-            collection_name: Name of the collection
-            data: Entity data to insert
-            entity_id: Optional ID for the entity. If None, one will be generated
+            collection_name: Name of the collection to add to
+            entity_id: ID for the new entity
+            data: Entity data
             
         Returns:
-            str: ID of the inserted entity
+            str: ID of the created entity
             
         Raises:
-            DatabaseError: If insert fails or schema validation fails
+            DatabaseError: If entity creation fails
         """
         pass
 
     @abstractmethod
-    def find_by_id(self, collection_name: str, entity_id: str) -> Dict[str, Any]:
-        """Retrieves an entity by its ID.
+    def get_entity(self, collection_name: str, entity_id: str) -> Dict[str, Any]:
+        """Get an entity by ID.
         
         Args:
             collection_name: Name of the collection
-            entity_id: ID of the entity to find
+            entity_id: ID of the entity to get
             
         Returns:
             Dict[str, Any]: Entity data or empty dict if not found
@@ -84,31 +84,30 @@ class DatabaseInterface(ABC):
         pass
 
     @abstractmethod
-    def find(self, collection_name: str, query: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Finds entities matching a query.
+    def get_entities(self, collection_name: str) -> List[Dict[str, Any]]:
+        """Get all entities in a collection.
         
         Args:
             collection_name: Name of the collection
-            query: Query criteria (implementation-specific format)
             
         Returns:
-            List[Dict[str, Any]]: List of matching entities
+            List[Dict[str, Any]]: List of entity data
         """
         pass
 
     @abstractmethod
     def update(self, collection_name: str, entity_id: str, data: Dict[str, Any], 
                upsert: bool = False) -> None:
-        """Updates an existing entity.
+        """Update entity data with optional upsert.
         
         Args:
             collection_name: Name of the collection
             entity_id: ID of the entity to update
-            data: New data to apply
-            upsert: If True, create entity if it doesn't exist
+            data: New entity data (will be merged with existing)
+            upsert: If True, insert if entity doesn't exist
             
         Raises:
-            DatabaseError: If update fails or schema validation fails
+            DatabaseError: If update fails
         """
         pass
 
@@ -200,3 +199,11 @@ class DatabaseInterface(ABC):
     def close(self) -> None:
         """Closes the database connection."""
         pass
+
+    def update_entity(self, collection_name: str, entity_id: str, data: Dict[str, Any]) -> None:
+        """DEPRECATED: Use update() instead.
+        
+        This method exists for backwards compatibility and will be removed in a future version.
+        It calls update() with upsert=False.
+        """
+        return self.update(collection_name, entity_id, data, upsert=False)

@@ -11,3 +11,5 @@ For each method, please include:
 4. Any important implementation details or considerations
 
 Please format your response in a clear, structured way. 
+
+After that, please use one of the available tools to you, to learn more about the database, and explain how the answer relates to your earlier explanation.

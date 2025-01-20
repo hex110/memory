@@ -1,232 +1,247 @@
+"""Base implementation of the agent interface."""
+
 import os
 import json
-import requests
 import time
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Dict, Any, Optional, List, Callable
+import requests
 from jinja2 import Environment, FileSystemLoader
-from src.utils.exceptions import ConfigError, APIError, APIConnectionError, APIResponseError, APIAuthenticationError
-from src.utils.config import (
-    load_config, get_api_key, get_model,
-    get_base_url, get_llm_config
+from src.utils.config import load_config
+from src.utils.exceptions import (
+    APIError, APIConnectionError, APIResponseError,
+    APIAuthenticationError, ConfigError
 )
-from src.utils.logging import get_logger, log_info, log_error
-from requests.exceptions import RequestException, Timeout, ConnectionError
-
-from .agent_interface import AgentInterface
-
-API_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
+from src.agent.agent_interface import AgentInterface, ToolSchema
+from src.database.database_interface import DatabaseInterface
+from src.ontology.ontology_manager import OntologyManager
+from src.utils.agent_tools import AgentDatabaseTools
 
 class BaseAgent(AgentInterface):
+    """Base class implementing common agent functionality."""
+    
     def __init__(
         self,
-        prompt_folder: str = "src/agent/prompts",
-        config_path: str = "src/config.json",
-        model: Optional[str] = None,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        timeout: int = 30,
-        max_retries: int = 2
+        config_path: str,
+        prompt_folder: str,
+        db_interface: DatabaseInterface,
+        ontology_manager: OntologyManager,
+        role: str
     ):
-        """Initialize the BaseAgent with prompt folder and configuration.
+        """Initialize the agent.
         
         Args:
-            prompt_folder (str): Path to the folder containing prompt templates
-            config_path (str): Path to the configuration file
-            model (Optional[str]): Override default model from config
-            api_key (Optional[str]): Override API key from config
-            base_url (Optional[str]): Override base URL from config
-            timeout (int): Request timeout in seconds
-            max_retries (int): Number of retries for failed requests
+            config_path: Path to config file
+            prompt_folder: Path to prompt templates folder
+            db_interface: Database interface instance
+            ontology_manager: Ontology manager instance
+            role: Agent role for determining available tools
             
         Raises:
-            ConfigError: If configuration loading fails or required keys are missing
+            ConfigError: If required config values are missing
         """
-        self.logger = get_logger(self.__class__.__name__)
-        try:
-            self.config = load_config(config_path)
-            
-            # Load API configuration with overrides
-            self.api_key = get_api_key(self.config, api_key)
-            self.model = get_model(self.config, model)
-            self.base_url = get_base_url(self.config, base_url)
-            self.timeout = timeout
-            self.max_retries = max_retries
-            
-            # Setup prompt environment
-            self.prompt_folder = prompt_folder
-            self.env = Environment(loader=FileSystemLoader(self.prompt_folder))
-            
-        except KeyError as e:
-            log_error(self.logger, "Configuration key missing", {"key": str(e)})
-            raise ConfigError(f"Missing configuration key: {e}")
-        except Exception as e:
-            log_error(self.logger, "Failed to initialize BaseAgent", {"error": str(e)})
-            raise ConfigError(f"Failed to load configuration: {e}")
-
+        self.config = load_config(config_path)
+        
+        # Validate required config
+        if not self.config.get("llm"):
+            raise ConfigError("Missing 'llm' section in config")
+        
+        llm_config = self.config["llm"]
+        required_fields = ["api_key", "model", "base_url"]
+        missing_fields = [f for f in required_fields if not llm_config.get(f)]
+        if missing_fields:
+            raise ConfigError(f"Missing required LLM config fields: {', '.join(missing_fields)}")
+        
+        self.env = Environment(loader=FileSystemLoader(prompt_folder))
+        
+        # Initialize database tools with role-specific access
+        self.db_tools = AgentDatabaseTools(db_interface, ontology_manager, role)
+        
+        # Initialize tool registries
+        self._tools: Dict[str, Callable] = {}
+        self._tool_schemas: List[ToolSchema] = []
+        
+        # Register all database tools available for this role
+        for schema in self.db_tools.get_tool_schemas():
+            self.register_tool(
+                schema["name"],
+                getattr(self.db_tools, schema["name"]),
+                schema
+            )
+    
+    @property
+    def available_tools(self) -> Dict[str, Callable]:
+        """Get available tools. Override in subclass to add tools."""
+        return self._tools
+    
+    @property
+    def tool_schemas(self) -> List[ToolSchema]:
+        """Get tool schemas. Override in subclass to add schemas."""
+        return self._tool_schemas
+    
+    def register_tool(self, name: str, func: Callable, schema: ToolSchema) -> None:
+        """Register a new tool.
+        
+        Args:
+            name: Name of the tool
+            func: The tool's implementation
+            schema: The tool's schema
+        """
+        self._tools[name] = func
+        self._tool_schemas.append(schema)
+    
     def load_prompt(self, prompt_name: str, context: Dict[str, Any]) -> str:
-        """Load and render a prompt template with the given context.
-        
-        Args:
-            prompt_name (str): Name of the prompt template to load
-            context (Dict[str, Any]): Context variables to render in the template
-            
-        Returns:
-            str: The rendered prompt string
-            
-        Raises:
-            Exception: If prompt loading or rendering fails
-        """
-        try:
-            template = self.env.get_template(f"{prompt_name}.txt")
-            prompt = template.render(context)
-            log_info(self.logger, "Prompt loaded successfully", {"prompt_name": prompt_name})
-            return prompt
-        except Exception as e:
-            log_error(self.logger, "Failed to load prompt", {"prompt_name": prompt_name, "error": str(e)})
-            raise
-
-    def call_llm(self, prompt: str, temperature: float = 0.7, system_prompt: Optional[str] = None) -> str:
-        """Call the LLM API with the given prompt and return the response.
-        
-        Args:
-            prompt (str): The prompt to send to the LLM
-            temperature (float): Sampling temperature (0-1)
-            system_prompt (Optional[str]): Optional system prompt
-            
-        Returns:
-            str: The LLM's response
-            
-        Raises:
-            APIConnectionError: If there are network connectivity issues
-            APIAuthenticationError: If the API key is invalid
-            APIResponseError: If the API response is invalid
-            APIError: For other API-related errors
-        """
+        """Load and render a prompt template."""
+        template = self.env.get_template(f"{prompt_name}.txt")
+        return template.render(**context)
+    
+    def call_llm(
+        self,
+        prompt: str,
+        temperature: float = 0.7,
+        system_prompt: Optional[str] = None,
+        **kwargs
+    ) -> str:
+        """Call the LLM API with retries and tool support."""
+        max_retries = 2
+        first_error = None
+        base_url = self.config["llm"]["base_url"]
         headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-            "HTTP-Referer": "Memory-Agent",  # For OpenRouter rankings
-            "X-Title": "Memory-Agent"  # For OpenRouter rankings
+            "Authorization": f"Bearer {self.config['llm']['api_key']}",
+            "Content-Type": "application/json"
         }
         
-        # Prepare messages
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
         
-        data = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature
-        }
+        # Add tool calling if tools are available
+        if self.tool_schemas:
+            kwargs["tools"] = [
+                {
+                    "type": "function",
+                    "function": schema
+                }
+                for schema in self.tool_schemas
+            ]
         
-        first_error = None
-        for attempt in range(self.max_retries):
+        for attempt in range(max_retries):
             try:
                 response = requests.post(
-                    self.base_url,
+                    base_url,
                     headers=headers,
-                    data=json.dumps(data),
-                    timeout=self.timeout
+                    json={
+                        "model": self.config["llm"]["model"],
+                        "messages": messages,
+                        "temperature": temperature,
+                        **kwargs
+                    },
+                    timeout=30
                 )
                 
-                # Handle HTTP errors
                 if response.status_code == 401:
-                    raise APIAuthenticationError(
-                        "Invalid API key or unauthorized access",
-                        status_code=response.status_code,
-                        response=response.text
-                    )
+                    raise APIAuthenticationError("Invalid API key")
+                
                 response.raise_for_status()
+                response_data = response.json()
                 
-                # Parse response
-                try:
-                    result = response.json()
-                except json.JSONDecodeError as e:
-                    raise APIResponseError(
-                        f"Invalid JSON response: {e}",
-                        status_code=response.status_code,
-                        response=response.text
-                    )
+                # Print response for debugging
+                print("\nAPI Response:", json.dumps(response_data, indent=2))
                 
-                if not result.get('choices') or not result['choices'][0].get('message', {}).get('content'):
-                    raise APIResponseError(
-                        "Invalid response format: missing required fields",
-                        status_code=response.status_code,
-                        response=response.text
-                    )
+                # Handle tool calls
+                message = response_data.get("choices", [{}])[0].get("message", {})
+                if message.get("tool_calls") and self.available_tools:
+                    return self._handle_tool_calls(message, messages)
                 
-                llm_output = result['choices'][0]['message']['content'].strip()
-                log_info(self.logger, "LLM response received", {
-                    "response_length": len(llm_output),
-                    "model": self.model,
-                    "total_tokens": result.get('usage', {}).get('total_tokens')
-                })
-                return llm_output
+                return message.get("content", "")
                 
-            except (ConnectionError, Timeout) as e:
-                error = APIConnectionError(f"Connection error: {str(e)}")
-                if first_error is None:
-                    first_error = error
-            except APIAuthenticationError as e:
-                # Don't retry auth errors
-                raise e
-            except APIResponseError as e:
-                # Don't retry response format errors
-                raise e
-            except RequestException as e:
-                error = APIError(
-                    f"Request failed: {str(e)}",
-                    status_code=getattr(e.response, 'status_code', None),
-                    response=getattr(e.response, 'text', None)
-                )
-                if first_error is None:
-                    first_error = error
-            except Exception as e:
-                error = APIError(f"Unexpected error: {str(e)}")
-                if first_error is None:
-                    first_error = error
-            
-            # Log retry attempt
-            if attempt < self.max_retries - 1:
-                retry_delay = 2 ** attempt  # Exponential backoff
-                log_info(self.logger, f"Retrying API call", {
-                    "attempt": attempt + 1,
-                    "max_retries": self.max_retries,
-                    "delay": retry_delay
-                })
-                time.sleep(retry_delay)
+            except requests.exceptions.Timeout as e:
+                first_error = first_error or e
+                time.sleep(2 ** attempt)  # Exponential backoff
+            except requests.exceptions.ConnectionError as e:
+                first_error = first_error or e
+                time.sleep(2 ** attempt)
+            except requests.exceptions.RequestException as e:
+                if response.status_code == 401:
+                    raise APIAuthenticationError("Invalid API key")
+                first_error = first_error or e
+                time.sleep(2 ** attempt)
         
-        # If we've exhausted all retries, raise the first error we encountered
-        log_error(self.logger, "API call failed after all retries", {
-            "max_retries": self.max_retries,
-            "error": str(first_error)
-        })
-        raise first_error or APIError("Maximum retries exceeded")
-
-    def parse_response(self, response: str) -> Any:
-        """Parse the LLM response to extract useful information.
-        
-        This is a basic implementation that can be overridden by subclasses
-        to provide more sophisticated parsing.
+        if isinstance(first_error, requests.exceptions.Timeout):
+            raise APIConnectionError("API request timed out") from first_error
+        elif isinstance(first_error, requests.exceptions.ConnectionError):
+            raise APIConnectionError("Failed to connect to API") from first_error
+        else:
+            raise APIResponseError("API request failed") from first_error
+    
+    def _handle_tool_calls(
+        self,
+        message: Dict[str, Any],
+        messages: List[Dict[str, Any]]
+    ) -> str:
+        """Handle tool calls from the LLM.
         
         Args:
-            response (str): The raw response from the LLM
+            message: The message containing the tool calls
+            messages: The current message history
             
         Returns:
-            Any: The parsed response (in base implementation, returns the raw string)
+            str: The final response after tool calling
         """
-        log_info(self.logger, "Parsing LLM response", {"response_snippet": response[:50]})
-        return response
-
-    def execute(self) -> None:
+        while message.get("tool_calls"):
+            # Add assistant's message with tool calls
+            messages.append({
+                "role": "assistant",
+                "content": message.get("content"),
+                "tool_calls": message["tool_calls"]
+            })
+            
+            # Handle each tool call
+            for tool_call in message["tool_calls"]:
+                func_name = tool_call["function"]["name"]
+                func_args = json.loads(tool_call["function"]["arguments"])
+                
+                # Call the function
+                function = self.available_tools[func_name]
+                function_response = function(**func_args)
+                
+                # Add tool response to messages
+                messages.append({
+                    "role": "tool",
+                    "name": func_name,
+                    "tool_call_id": tool_call["id"],
+                    "content": json.dumps(function_response)
+                })
+            
+            # Get next action from LLM
+            response = requests.post(
+                self.config["llm"]["base_url"],
+                headers={
+                    "Authorization": f"Bearer {self.config['llm']['api_key']}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": self.config["llm"]["model"],
+                    "messages": messages,
+                    "tools": [{"type": "function", "function": schema} for schema in self.tool_schemas]
+                }
+            )
+            response.raise_for_status()
+            message = response.json()["choices"][0]["message"]
+        
+        return message.get("content", "")
+    
+    def execute(self) -> Any:
         """Execute the agent's primary function.
         
-        This method must be implemented by concrete agent classes to define
-        their specific behavior and logic flow.
-        
-        Raises:
-            NotImplementedError: This method must be overridden by subclasses
+        This should be implemented by subclasses.
         """
-        raise NotImplementedError("Execute method must be implemented by the agent.") 
+        raise NotImplementedError
+    
+    def parse_response(self, response: str) -> Any:
+        """Parse the LLM's response.
+        
+        This can be overridden by subclasses for specific parsing.
+        """
+        return response 

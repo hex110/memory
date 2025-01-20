@@ -15,14 +15,21 @@ class PostgreSQLDatabase(DatabaseInterface):
         """Initialize PostgreSQL connection pool and schema registry."""
         self.config = config
         self.schemas = {}  # Store collection schemas
+        
+        # Build connection parameters, omitting empty values for peer auth
+        conn_params = {
+            "host": config.get("host"),
+            "database": config.get("database"),
+            "user": config.get("user"),
+        }
+        if config.get("password"):  # Only include password if provided
+            conn_params["password"] = config["password"]
+        
         try:
             self.connection_pool = pool.ThreadedConnectionPool(
                 1,  # Minimum connections
                 10,  # Maximum connections
-                host=config.get("host"),
-                database=config.get("database"),
-                user=config.get("user"),
-                password=config.get("password")
+                **conn_params
             )
         except Exception as e:
             raise DatabaseError(f"Error setting up database pool: {e}")
@@ -34,11 +41,14 @@ class PostgreSQLDatabase(DatabaseInterface):
             conn = self.connection_pool.getconn()
             with conn.cursor() as cur:
                 cur.execute(query, params)
+                conn.commit()  # Ensure changes are committed
                 if cur.description:
                     cols = [col.name for col in cur.description]
                     return [dict(zip(cols, row)) for row in cur.fetchall()]
                 return []
         except Exception as e:
+            if conn:
+                conn.rollback()  # Rollback on error
             raise DatabaseError(f"Query execution failed: {e}")
         finally:
             if conn:
@@ -50,16 +60,17 @@ class PostgreSQLDatabase(DatabaseInterface):
             # Create table with JSONB data column for flexibility
             query = f"""
             CREATE TABLE IF NOT EXISTS {collection_name} (
-                id UUID PRIMARY KEY,
+                id TEXT PRIMARY KEY,
                 data JSONB NOT NULL,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )"""
             self._execute_query(query)
             
+            # Store schema if provided
             if schema:
                 self.schemas[collection_name] = schema
-                # Could add DB triggers for schema validation
+                
         except Exception as e:
             raise DatabaseError(f"Failed to create collection {collection_name}: {e}")
 
@@ -72,12 +83,9 @@ class PostgreSQLDatabase(DatabaseInterface):
         self.schemas[collection_name] = schema
         # Could update DB triggers for new schema validation
 
-    def insert(self, collection_name: str, data: Dict[str, Any], entity_id: Optional[str] = None) -> str:
-        """Insert entity into collection."""
+    def add_entity(self, collection_name: str, entity_id: str, data: Dict[str, Any]) -> str:
+        """Add a new entity to a collection."""
         try:
-            if entity_id is None:
-                entity_id = str(uuid.uuid4())
-            
             query = f"""
             INSERT INTO {collection_name} (id, data)
             VALUES (%s, %s)
@@ -86,17 +94,21 @@ class PostgreSQLDatabase(DatabaseInterface):
             result = self._execute_query(query, (entity_id, json.dumps(data)))
             return str(result[0]["id"])
         except Exception as e:
-            raise DatabaseError(f"Insert failed: {e}")
+            raise DatabaseError(f"Failed to add entity: {e}")
 
-    def find_by_id(self, collection_name: str, entity_id: str) -> Dict[str, Any]:
-        """Find entity by ID."""
+    def get_entity(self, collection_name: str, entity_id: str) -> Dict[str, Any]:
+        """Get an entity by ID."""
         query = f"SELECT data FROM {collection_name} WHERE id = %s"
         result = self._execute_query(query, (entity_id,))
         return result[0]["data"] if result else {}
 
+    def get_entities(self, collection_name: str) -> List[Dict[str, Any]]:
+        """Get all entities in a collection."""
+        query = f"SELECT data FROM {collection_name}"
+        return [row["data"] for row in self._execute_query(query)]
+
     def find(self, collection_name: str, query: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Find entities matching query criteria."""
-        # Convert dict query to JSONB query conditions
         conditions = []
         params = []
         for key, value in query.items():
@@ -107,30 +119,6 @@ class PostgreSQLDatabase(DatabaseInterface):
         sql = f"SELECT data FROM {collection_name} WHERE {where_clause}"
         
         return [row["data"] for row in self._execute_query(sql, tuple(params))]
-
-    def update(self, collection_name: str, entity_id: str, data: Dict[str, Any], 
-               upsert: bool = False) -> None:
-        """Update entity data."""
-        try:
-            if upsert:
-                query = f"""
-                INSERT INTO {collection_name} (id, data)
-                VALUES (%s, %s)
-                ON CONFLICT (id) DO UPDATE
-                SET data = {collection_name}.data || %s::jsonb,
-                    updated_at = CURRENT_TIMESTAMP
-                """
-                self._execute_query(query, (entity_id, json.dumps(data), json.dumps(data)))
-            else:
-                query = f"""
-                UPDATE {collection_name}
-                SET data = data || %s::jsonb,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = %s
-                """
-                self._execute_query(query, (json.dumps(data), entity_id))
-        except Exception as e:
-            raise DatabaseError(f"Update failed: {e}")
 
     def delete(self, collection_name: str, entity_id: str) -> None:
         """Delete entity."""
@@ -201,3 +189,27 @@ class PostgreSQLDatabase(DatabaseInterface):
     def close(self) -> None:
         """Close all connections."""
         self.connection_pool.closeall()
+
+    def update(self, collection_name: str, entity_id: str, data: Dict[str, Any], 
+               upsert: bool = False) -> None:
+        """Update entity data with optional upsert."""
+        try:
+            if upsert:
+                query = f"""
+                INSERT INTO {collection_name} (id, data)
+                VALUES (%s, %s)
+                ON CONFLICT (id) DO UPDATE
+                SET data = {collection_name}.data || %s::jsonb,
+                    updated_at = CURRENT_TIMESTAMP
+                """
+                self._execute_query(query, (entity_id, json.dumps(data), json.dumps(data)))
+            else:
+                query = f"""
+                UPDATE {collection_name}
+                SET data = data || %s::jsonb,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                """
+                self._execute_query(query, (json.dumps(data), entity_id))
+        except Exception as e:
+            raise DatabaseError(f"Update failed: {e}")

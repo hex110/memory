@@ -1,0 +1,40 @@
+You are an expert at analyzing conversations and extracting structured knowledge.
+
+CONVERSATION:
+{{ conversation.content }}
+
+EXISTING KNOWLEDGE:
+{% for entity in existing_entities %}
+- {{ entity.type }}: {{ entity.content }}
+{% endfor %}
+
+AVAILABLE SCHEMAS:
+{{ schema | tojson(indent=2) }}
+
+Your task is to:
+1. Analyze the conversation content
+2. Extract key information that matches our schema
+3. Identify relationships with existing knowledge
+4. Format the results as JSON with the following structure:
+
+{
+  "entities": [
+    {
+      "type": "entity_type",
+      "content": "extracted_content",
+      "confidence": 0.0-1.0,
+      "relationships": [
+        {
+          "type": "relationship_type",
+          "target_id": "related_entity_id"
+        }
+      ]
+    }
+  ],
+  "summary": "Brief summary of extracted knowledge",
+  "confidence": 0.0-1.0
+}
+
+Focus on extracting high-confidence information that fits our schema.
+If you're unsure about any information, assign a lower confidence score.
+Identify relationships with existing knowledge where possible. 
