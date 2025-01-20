@@ -1,2 +1,5 @@
 .specstory
 .venv
+docs
+.env
+config.json
