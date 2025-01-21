@@ -162,3 +162,7 @@ Use `scripts/backup_db.sh` for database backups and resets:
     - Create a fresh database
 
     *Note:* Restart the application to initialize the new schema.
+
+## License
+
+This project is licensed under the European Union Public License 1.2 (EUPL-1.2). This license applies to all files in this repository and all previous commits, regardless of their date. The EUPL is a copyleft license that is compatible with several other open-source licenses, including the GPLv2, GPLv3, AGPLv3, and others (see the Appendix of the license for the full list of compatible licenses).
