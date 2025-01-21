@@ -1,7 +1,22 @@
-Analyze the following personality data and provide customization recommendations for the given request.
+Analyze the following personality data and provide personalized recommendations for the given request.
 
-REQUEST:
-{{request}}
+REQUEST CONTEXT:
+Service Type: {{request.context.service_type}}
+Request Type: {{request.context.request_type}}
+Parameters: {{request.context.parameters}}
+
+CONTENT TO PROCESS:
+{{request.content}}
+
+PREFERENCES TO CONSIDER:
+{% if request.preferences %}
+{% for pref in request.preferences %}
+- {{pref}}
+{% endfor %}
+{% endif %}
+
+OPTIONS:
+{{request.options}}
 
 PERSONALITY DATA:
 {% if personality_data.traits %}
@@ -27,5 +42,10 @@ BEHAVIORAL PATTERNS:
 {% endfor %}
 {% endif %}
 
-Based on this personality profile, provide customization recommendations that would best suit their preferences and behavior patterns.
-Focus on how their traits and patterns should influence content presentation, visual style, and engagement approach. 
+Based on this personality profile and the specific service request:
+1. Analyze how the user's traits and patterns relate to this specific service type
+2. Generate recommendations that align with their personality and the service requirements
+3. Provide clear reasoning for each recommendation, linking to specific traits and patterns
+4. Consider any service-specific parameters and preferences in your recommendations
+
+Remember to format your response according to the specified JSON structure, ensuring all recommendations are relevant to the service type. 

@@ -7,3 +7,5 @@ typing_extensions
 litellm
 json-repair
 pydantic
+fastapi
+uvicorn

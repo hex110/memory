@@ -1,5 +1,15 @@
-.specstory
-.venv
-docs
+# Python
+__pycache__/
+
+# Environment
 .env
+.venv
+
+# IDE
+.vscode/
+
+# Cursor
+.specstory
+
+# Config
 src/config.json

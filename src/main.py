@@ -4,8 +4,13 @@ import os
 import json
 import logging
 import psycopg2
+import time
+import threading
+import argparse
 from typing import Dict, Any, Optional
 from pathlib import Path
+import requests
+import uvicorn
 
 from src.database.postgresql import PostgreSQLDatabase
 from src.ontology.manager import OntologyManager
@@ -150,9 +155,151 @@ def init_database(config: Dict[str, Any]) -> PostgreSQLDatabase:
         logger.error(f"Failed to initialize database: {e}")
         raise
 
+def run_server():
+    """Run the uvicorn server."""
+    uvicorn.run(
+        "src.api.server:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,  # Enable reload for development
+        log_level="info"
+    )
+
+def test_api_pipeline():
+    """Test the API pipeline with a sample personalization request."""
+    logger.info("Testing API pipeline...")
+    
+    # Wait for server to be ready
+    logger.info("Waiting for server to be ready...")
+    time.sleep(2)  # Give the server time to start
+    
+    max_retries = 5
+    retry_delay = 1
+    
+    for attempt in range(max_retries):
+        try:
+            # Test health endpoint first
+            health_response = requests.get("http://localhost:8000/health")
+            if health_response.status_code == 200:
+                logger.info("Server is healthy, proceeding with test")
+                break
+            else:
+                logger.warning(f"Server not ready (attempt {attempt + 1}/{max_retries})")
+                time.sleep(retry_delay)
+        except requests.exceptions.ConnectionError:
+            if attempt < max_retries - 1:
+                logger.warning(f"Server not ready (attempt {attempt + 1}/{max_retries})")
+                time.sleep(retry_delay)
+            else:
+                logger.error("Server failed to start")
+                raise
+    
+    # Test data following the PersonalizationRequest model
+    test_request = {
+        "context": {
+            "service_type": "blog",
+            "request_type": "customize",
+            "user_id": "test_user",
+            "parameters": {
+                "content_type": "technical",
+                "target_audience": "developers",
+                "estimated_read_time": "15 minutes"
+            }
+        },
+        "content": {
+            "type": "technical_blog",
+            "customization_aspects": [
+                "content_style",
+                "visual_preferences",
+                "code_examples"
+            ]
+        },
+        "preferences": [
+            "Prefers detailed technical explanations",
+            "Values code examples",
+            "Interested in performance optimization"
+        ],
+        "options": {
+            "style": ["tutorial", "deep-dive", "quick-tips"],
+            "format": ["markdown", "jupyter"]
+        }
+    }
+    
+    try:
+        # Send request to API
+        response = requests.post(
+            "http://localhost:8000/personalize",
+            json=test_request
+        )
+        
+        # Check response
+        if response.status_code == 200:
+            result = response.json()
+            logger.info("API test successful!")
+            logger.info("Response:")
+            logger.info(json.dumps(result, indent=2))
+            
+            # Validate response structure
+            assert "status" in result, "Missing status field"
+            assert "service_type" in result, "Missing service_type field"
+            assert "recommendations" in result, "Missing recommendations field"
+            assert "reasoning" in result, "Missing reasoning field"
+            assert "metadata" in result, "Missing metadata field"
+            
+            logger.info("Response validation passed!")
+        else:
+            logger.error(f"API test failed with status {response.status_code}")
+            logger.error(f"Error: {response.text}")
+            
+    except Exception as e:
+        logger.error(f"API test failed: {e}")
+        raise
+    
+
+def analyze_test_conversation(config_path: str, db: PostgreSQLDatabase):
+    """Analyze the test conversation file."""
+    logger.info("Running analysis mode...")
+    
+    ontology = OntologyManager(initial_schema=get_ontology_schema())
+    analyzer = AnalyzerAgent(
+        config_path=config_path,
+        prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
+        db_interface=db,
+        ontology_manager=ontology
+    )
+
+    try:
+        with open("src/test_conversation.txt", "r") as f:
+            conversation_content = f.read()
+
+        conversation = {
+            "id": "test_1",
+            "content": conversation_content,
+            "timestamp": "2024-01-20T14:00:00Z",
+            "analyzed": False
+        }
+
+        result = analyzer.analyze_conversation(conversation)
+        logger.info("Analysis complete. Result:")
+        logger.info(json.dumps(result, indent=2))
+        
+    except FileNotFoundError:
+        logger.error("test_conversation.txt not found in src directory")
+        raise
+    except Exception as e:
+        logger.error(f"Analysis failed: {e}")
+        raise
+
 def main():
     """Main entry point."""
     try:
+        # Parse command line arguments
+        parser = argparse.ArgumentParser(description='Memory System CLI')
+        group = parser.add_mutually_exclusive_group()
+        group.add_argument('-server', action='store_true', help='Run the API server')
+        group.add_argument('-analyze', action='store_true', help='Analyze test conversation')
+        args = parser.parse_args()
+
         # Ensure config exists
         config_path = ensure_config_exists()
         
@@ -161,142 +308,202 @@ def main():
         
         # Initialize components
         db = init_database(config)
-        ontology = OntologyManager(initial_schema=get_ontology_schema())
+
+        if args.analyze:
+            analyze_test_conversation(config_path, db)
+        elif args.server:
+            logger.info("Starting API server...")
+            run_server()
+        else:
+            logger.info("No mode specified. Use -server to run the API server or -analyze to analyze test conversation")
+            parser.print_help()
         
-        # Initialize analyzer agent
-        analyzer = AnalyzerAgent(
-            config_path=config_path,
-            prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
-            db_interface=db,
-            ontology_manager=ontology
-        )
+    except KeyboardInterrupt:
+        logger.info("Shutting down...")
+    except Exception as e:
+        logger.error(f"Error in main: {e}")
+        raise
 
-        # Initialize curator agent
-        curator = CuratorAgent(
-            config_path=config_path,
-            prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
-            db_interface=db,
-            ontology_manager=ontology
-        )
+if __name__ == "__main__":
+    main()
+
+# If I want to run tests in main, run server in different thread
+# server_thread = threading.Thread(target=run_server)
+#         server_thread.daemon = True  # Allow the thread to be killed when main 
+#         exits
+#         server_thread.start()
+
+# Run API tests
+# test_api_pipeline()
+
+# ontology = OntologyManager(initial_schema=get_ontology_schema())
+#         # Initialize analyzer agent
+#         analyzer = AnalyzerAgent(
+#             config_path=config_path,
+#             prompt_folder=os.path.join(os.path.dirname(__file__), "agent", 
+#             "prompts"),
+#             db_interface=db,
+#             ontology_manager=ontology
+#         )
+
+#         # Initialize curator agent
+#         curator = CuratorAgent(
+#             config_path=config_path,
+#             prompt_folder=os.path.join(os.path.dirname(__file__), "agent", 
+#             "prompts"),
+#             db_interface=db,
+#             ontology_manager=ontology
+#         )
         
-        # Test conversations for analysis
-        test_conversations = [
-            {
-                "id": "test_1",
-                "content": """
-                Assistant: Let's explore how you handle work and challenges. What's your approach to solving complex problems?
+#         # Test conversations for analysis
+#         test_conversations = [
+#             {
+#                 "id": "test_1",
+#                 "content": """
+#                 Assistant: Let's explore how you handle work and challenges. 
+#                 What's your approach to solving complex problems?
 
-                User: I love diving into complex problems! I usually start by breaking them down into smaller pieces and creating a detailed plan. I get really excited about finding innovative solutions, even if it means taking some risks. Sometimes I can get so absorbed that I lose track of time.
+#                 User: I love diving into complex problems! I usually start by 
+#                 breaking them down into smaller pieces and creating a detailed 
+#                 plan. I get really excited about finding innovative solutions, 
+#                 even if it means taking some risks. Sometimes I can get so 
+#                 absorbed that I lose track of time.
 
-                Assistant: That's interesting! And how do you typically work with others in a team setting?
+#                 Assistant: That's interesting! And how do you typically work with 
+#                 others in a team setting?
 
-                User: I'm actually quite energetic in team settings and enjoy brainstorming sessions. I like to take initiative and propose new ideas, though sometimes I might come across as too enthusiastic. I do try to make sure everyone gets a chance to speak, but I often find myself naturally taking the lead.
+#                 User: I'm actually quite energetic in team settings and enjoy 
+#                 brainstorming sessions. I like to take initiative and propose new 
+#                 ideas, though sometimes I might come across as too enthusiastic. 
+#                 I do try to make sure everyone gets a chance to speak, but I 
+#                 often find myself naturally taking the lead.
 
-                Assistant: How do you handle setbacks or when things don't go according to plan?
+#                 Assistant: How do you handle setbacks or when things don't go 
+#                 according to plan?
 
-                User: I try to stay positive and see setbacks as learning opportunities. Sure, it can be frustrating initially, but I quickly start looking for alternative approaches. I'm pretty adaptable and don't mind changing course if something isn't working. That said, I can be a bit impatient sometimes when things move too slowly.
+#                 User: I try to stay positive and see setbacks as learning 
+#                 opportunities. Sure, it can be frustrating initially, but I 
+#                 quickly start looking for alternative approaches. I'm pretty 
+#                 adaptable and don't mind changing course if something isn't 
+#                 working. That said, I can be a bit impatient sometimes when 
+#                 things move too slowly.
 
-                Assistant: What about your learning style? How do you approach new skills or knowledge?
+#                 Assistant: What about your learning style? How do you approach 
+#                 new skills or knowledge?
 
-                User: I'm a very hands-on learner. I prefer jumping in and experimenting rather than reading long manuals. I get excited about learning new things and often have multiple projects or courses going at once. Sometimes I might start too many things at once, but I'm always eager to expand my knowledge and try new approaches.
-                """,
-                "timestamp": "2024-01-20T14:00:00Z",
-                "analyzed": False
-            },
-            {
-                "id": "test_2",
-                "content": """
-                Assistant: I'd like to understand how you navigate social situations and relationships. Could you tell me about how you typically interact in social gatherings?
+#                 User: I'm a very hands-on learner. I prefer jumping in and 
+#                 experimenting rather than reading long manuals. I get excited 
+#                 about learning new things and often have multiple projects or 
+#                 courses going at once. Sometimes I might start too many things at 
+#                 once, but I'm always eager to expand my knowledge and try new 
+#                 approaches.
+#                 """,
+#                 "timestamp": "2024-01-20T14:00:00Z",
+#                 "analyzed": False
+#             },
+#             {
+#                 "id": "test_2",
+#                 "content": """
+#                 Assistant: I'd like to understand how you navigate social 
+#                 situations and relationships. Could you tell me about how you 
+#                 typically interact in social gatherings?
 
-                User: Well, it's interesting... I tend to observe first before fully engaging. I enjoy social gatherings, but I need to get a feel for the dynamics. Sometimes I find myself playing different roles - like being the mediator when there's tension, or the one who draws out quieter people. But I also notice I need breaks to recharge, especially after intense social interactions.
+#                 User: Well, it's interesting... I tend to observe first before 
+#                 fully engaging. I enjoy social gatherings, but I need to get a 
+#                 feel for the dynamics. Sometimes I find myself playing different 
+#                 roles - like being the mediator when there's tension, or the one 
+#                 who draws out quieter people. But I also notice I need breaks to 
+#                 recharge, especially after intense social interactions.
 
-                Assistant: That's fascinating. How do you handle emotional situations, whether your own emotions or others'?
+#                 Assistant: That's fascinating. How do you handle emotional 
+#                 situations, whether your own emotions or others'?
 
-                User: I've learned to be more mindful about emotions over time. I used to try to fix everything immediately, but now I recognize sometimes people just need someone to listen. I'm pretty good at reading subtle cues in others' behavior, though this sensitivity can sometimes be overwhelming. I process my own emotions by writing or going for long walks - it helps me understand what I'm really feeling and why.
+#                 User: I've learned to be more mindful about emotions over time. I 
+#                 used to try to fix everything immediately, but now I recognize 
+#                 sometimes people just need someone to listen. I'm pretty good at 
+#                 reading subtle cues in others' behavior, though this sensitivity 
+#                 can sometimes be overwhelming. I process my own emotions by 
+#                 writing or going for long walks - it helps me understand what I'm 
+#                 really feeling and why.
 
-                Assistant: Could you share how you approach personal goals and growth?
+#                 Assistant: Could you share how you approach personal goals and 
+#                 growth?
 
-                User: I'm quite methodical about personal development, actually. I like to set structured goals but keep them flexible enough to adapt. I've noticed I'm most successful when I balance pushing myself with being realistic. The interesting part is that I often find myself achieving goals in unexpected ways - like starting a project for one reason and discovering it fulfills a completely different personal goal.
+#                 User: I'm quite methodical about personal development, actually. 
+#                 I like to set structured goals but keep them flexible enough to 
+#                 adapt. I've noticed I'm most successful when I balance pushing 
+#                 myself with being realistic. The interesting part is that I often 
+#                 find myself achieving goals in unexpected ways - like starting a 
+#                 project for one reason and discovering it fulfills a completely 
+#                 different personal goal.
 
-                Assistant: How do you deal with conflicts or disagreements in your relationships?
+#                 Assistant: How do you deal with conflicts or disagreements in 
+#                 your relationships?
 
-                User: That's evolved a lot for me. I used to avoid conflicts entirely, but I've learned that addressing issues early prevents bigger problems. I try to understand the other person's perspective first, though sometimes I catch myself preparing my response before they finish speaking - it's something I'm working on. I value harmony but not at the expense of authenticity. Sometimes I surprise myself by being quite firm on my boundaries, especially when it comes to core values.
+#                 User: That's evolved a lot for me. I used to avoid conflicts 
+#                 entirely, but I've learned that addressing issues early prevents 
+#                 bigger problems. I try to understand the other person's 
+#                 perspective first, though sometimes I catch myself preparing my 
+#                 response before they finish speaking - it's something I'm working 
+#                 on. I value harmony but not at the expense of authenticity. 
+#                 Sometimes I surprise myself by being quite firm on my boundaries, 
+#                 especially when it comes to core values.
 
-                Assistant: What about your approach to making important decisions?
+#                 Assistant: What about your approach to making important decisions?
 
-                User: It's a bit of a paradox, really. I gather lots of information and analyze thoroughly, but I also trust my intuition strongly. Sometimes I find myself making lists and weighing pros and cons, only to realize I knew the answer instinctively from the start. I tend to consider how my decisions might affect others, maybe sometimes too much. I've noticed I'm more confident with professional decisions than personal ones - there's an interesting disconnect there that I'm trying to understand better.
+#                 User: It's a bit of a paradox, really. I gather lots of 
+#                 information and analyze thoroughly, but I also trust my intuition 
+#                 strongly. Sometimes I find myself making lists and weighing pros 
+#                 and cons, only to realize I knew the answer instinctively from 
+#                 the start. I tend to consider how my decisions might affect 
+#                 others, maybe sometimes too much. I've noticed I'm more confident 
+#                 with professional decisions than personal ones - there's an 
+#                 interesting disconnect there that I'm trying to understand better.
 
-                Assistant: How do you handle unexpected changes or disruptions to your plans?
+#                 Assistant: How do you handle unexpected changes or disruptions to 
+#                 your plans?
 
-                User: *laughs* That's been a journey of growth! I used to get really thrown off by unexpected changes, but I've developed this sort of... flexible resilience, I guess you could call it. I still like having backup plans - actually, usually backup plans for my backup plans - but I've learned to find opportunities in chaos. Though I have to admit, I still sometimes catch myself trying to control things that really aren't controllable. It's interesting how often the unexpected detours end up leading to better outcomes than my original plans.
-                """,
-                "timestamp": "2024-01-21T15:30:00Z",
-                "analyzed": False
-            }
-        ]
+#                 User: *laughs* That's been a journey of growth! I used to get 
+#                 really thrown off by unexpected changes, but I've developed this 
+#                 sort of... flexible resilience, I guess you could call it. I 
+#                 still like having backup plans - actually, usually backup plans 
+#                 for my backup plans - but I've learned to find opportunities in 
+#                 chaos. Though I have to admit, I still sometimes catch myself 
+#                 trying to control things that really aren't controllable. It's 
+#                 interesting how often the unexpected detours end up leading to 
+#                 better outcomes than my original plans.
+#                 """,
+#                 "timestamp": "2024-01-21T15:30:00Z",
+#                 "analyzed": False
+#             }
+#         ]
         
-        # Comment out analysis for now
+        # Comment out previous tests
+        # """
+        # # Comment out analysis for now
         # for conversation in test_conversations:
-        #     logger.info(f"Running analysis on conversation {conversation['id']}...")
+        #     logger.info(f"Running analysis on conversation {conversation['id']}...
+        #     ")
         #     result = analyzer.analyze_conversation(conversation)
         #     logger.info(f"Analysis complete for {conversation['id']}:")
         #     logger.info(json.dumps(result, indent=2))
 
-        # Test blog customization request
-        test_request = {
-            "user_id": "user123",
-            "content_type": "technical_blog",
-            "customization_aspects": [
-                "content_style",
-                "visual_preferences",
-                "reading_level"
-            ],
-            "context": {
-                "article_topic": "Machine Learning Architecture Patterns",
-                "target_audience": "Software Engineers",
-                "estimated_read_time": "15 minutes"
-            }
-        }
+        # # Test blog customization request
+        # test_request = {
+        #     "user_id": "user123",
+        #     "content_type": "technical_blog",
+        #     "customization_aspects": [
+        #         "content_style",
+        #         "visual_preferences",
+        #         "reading_level"
+        #     ],
+        #     "context": {
+        #         "article_topic": "Machine Learning Architecture Patterns",
+        #         "target_audience": "Software Engineers",
+        #         "estimated_read_time": "15 minutes"
+        #     }
+        # }
         
-        logger.info("Testing blog customization...")
-        customization_result = curator.execute(test_request)
-        
-        # Display examples
-        print("\n" + "="*80)
-        print("EXAMPLE CONVERSATIONS THAT CAN BE ANALYZED")
-        print("="*80)
-        
-        for i, conv in enumerate(test_conversations, 1):
-            print(f"\nCONVERSATION {i}:")
-            print("-"*40)
-            print(conv["content"])
-            print("\n" + "-"*40)
-
-        print("\n" + "="*80)
-        print("EXAMPLE BLOG CUSTOMIZATION REQUEST & RESPONSE")
-        print("="*80)
-        
-        print("\nREQUEST:")
-        print("-"*40)
-        print(json.dumps(test_request, indent=2))
-        
-        print("\nRESPONSE:")
-        print("-"*40)
-        # Parse the JSON from the markdown code block
-        response_text = customization_result.strip('`\n ')
-        if response_text.startswith('json'):
-            response_text = response_text[4:]  # Remove 'json' prefix
-        response_json = json.loads(response_text)
-        print(json.dumps(response_json, indent=2))
-        
-    except ConfigError as e:
-        logger.error(f"Configuration error: {e}")
-        return 1
-    except Exception as e:
-        logger.error(f"Error in main: {e}", exc_info=True)
-        return 1
-    
-    return 0
-
-if __name__ == "__main__":
-    exit(main())
+        # logger.info("Testing blog customization...")
+        # customization_result = curator.execute(test_request)
+        # """

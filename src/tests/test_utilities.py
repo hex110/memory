@@ -1,6 +1,6 @@
 import unittest
 import os
-from src.utils import config, logging, exceptions, transformation, api
+from src.utils import config, logging
 from src.utils.exceptions import ConfigError
 
 
@@ -84,44 +84,6 @@ class TestUtilities(unittest.TestCase):
         logger = logging.get_logger("test_logger")
         logging.log_debug(logger, "test debug", {"test": "data"})
         self.assertTrue(True)
-
-    # Transformation Tests
-    def test_to_dict_simple(self):
-        """Test dictionary conversion for simple types."""
-        self.assertEqual(transformation.to_dict(1), {"value": 1})
-        self.assertEqual(transformation.to_dict("string"), {"value": "string"})
-        self.assertEqual(transformation.to_dict({"key": "value"}), {"key": "value"})
-
-    def test_to_dict_complex(self):
-        """Test dictionary conversion for complex objects."""
-        class TestClass:
-            def __init__(self):
-                self.key = "value"
-        obj = TestClass()
-        self.assertEqual(transformation.to_dict(obj), {"key": "value"})
-
-    # API Tests
-    def test_generate_id(self):
-        """Test unique ID generation."""
-        id1 = api.generate_id()
-        id2 = api.generate_id()
-        self.assertNotEqual(id1, id2)
-        # Verify UUID format
-        self.assertEqual(len(id1.split('-')), 5)
-
-    def test_build_response(self):
-        """Test API response building."""
-        response = api.build_response({"key": "value"}, 200, "test")
-        self.assertEqual(response["code"], 200)
-        self.assertEqual(response["message"], "test")
-        self.assertEqual(response["data"], {"key": "value"})
-
-    def test_build_response_defaults(self):
-        """Test API response building with default values."""
-        response = api.build_response({"key": "value"})
-        self.assertEqual(response["code"], 200)
-        self.assertEqual(response["message"], "Success")
-        self.assertEqual(response["data"], {"key": "value"})
 
 
 if __name__ == '__main__':

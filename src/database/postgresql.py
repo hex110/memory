@@ -3,7 +3,6 @@ from typing import Any, Dict, List, Optional, Union
 from src.interfaces.postgresql import DatabaseInterface
 from src.utils.exceptions import DatabaseError
 from src.utils.config import get_config, load_config
-from src.utils.api import generate_id
 from psycopg2 import pool
 import json
 import uuid
@@ -34,6 +33,41 @@ class PostgreSQLDatabase(DatabaseInterface):
                 10,  # Maximum connections
                 **conn_params
             )
+        except psycopg2.OperationalError as e:
+            if "Connection refused" in str(e):
+                raise DatabaseError(
+                    "\nPostgreSQL connection failed. Please check:\n"
+                    "1. Is PostgreSQL installed?\n"
+                    "   - Arch Linux: sudo pacman -S postgresql\n"
+                    "   - Ubuntu: sudo apt install postgresql\n"
+                    "   - macOS: brew install postgresql\n"
+                    "2. Is PostgreSQL service running?\n"
+                    "   - Linux: sudo systemctl start postgresql\n"
+                    "   - macOS: brew services start postgresql\n"
+                    "3. Have you initialized the database? (First time setup)\n"
+                    "   - Linux: sudo -u postgres initdb -D /var/lib/postgres/data\n"
+                    "   - macOS: initdb /usr/local/var/postgres\n"
+                    "4. Can your user access PostgreSQL?\n"
+                    "   - Create user: sudo -u postgres createuser -s $USER\n"
+                    "5. Check your database settings in config.json and .env\n"
+                ) from e
+            elif "database" in str(e) and "does not exist" in str(e):
+                raise DatabaseError(
+                    f"\nDatabase '{conn_params['database']}' does not exist. To create it:\n"
+                    "1. Connect to PostgreSQL:\n"
+                    "   sudo -u postgres psql\n"
+                    f"2. Create database: CREATE DATABASE {conn_params['database']};\n"
+                    "3. Exit psql: \\q\n"
+                ) from e
+            elif "password authentication failed" in str(e):
+                raise DatabaseError(
+                    "\nPostgreSQL authentication failed. Please check:\n"
+                    "1. Your database password in .env is correct\n"
+                    "2. Your pg_hba.conf is configured correctly\n"
+                    "3. Your user has the correct permissions\n"
+                ) from e
+            else:
+                raise DatabaseError(f"Database connection failed: {e}") from e
         except Exception as e:
             raise DatabaseError(f"Error setting up database pool: {e}")
 
