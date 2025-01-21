@@ -1,3 +1,31 @@
+"""Interface definition for flexible database operations.
+
+This module defines a schema-agnostic contract for database implementations.
+It treats the database as a collection of entities with flexible schemas.
+Features:
+- Dynamic schema evolution through definitions.py
+- Flexible entity types
+- Schema-less or schema-full operation
+- JSON-like data storage
+- Generic query capabilities
+
+Example of database initialization:
+
+```python
+from src.database.postgresql import PostgreSQLDatabase
+from src.schemas.definitions import get_database_schema
+
+# Initialize with schema from definitions.py
+db = PostgreSQLDatabase(config)
+db.initialize_database()  # Creates tables based on current schema
+```
+
+Schema management is handled through src/schemas/definitions.py:
+1. Update schema definitions in definitions.py
+2. Reset database to apply changes
+3. Restart application
+"""
+
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Union
 
@@ -50,6 +78,19 @@ class DatabaseInterface(ABC):
             
         Raises:
             DatabaseError: If schema update fails
+        """
+        pass
+
+    @abstractmethod
+    def initialize_database(self) -> None:
+        """Initialize database with current schema from definitions.py.
+        
+        This method:
+        1. Creates tables based on current schema definitions
+        2. Creates necessary indexes
+        3. Stores schema definitions in memory for validation
+        
+        Note: Schema changes should be made in definitions.py
         """
         pass
 

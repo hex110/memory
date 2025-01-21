@@ -1,8 +1,10 @@
 """Schema definitions for the system.
 
-This module contains both:
-1. Database Schema: Defines the structural schema (tables, fields, types)
-2. Ontology Schema: Defines the semantic schema (concepts, relationships)
+This module is the single source of truth for database schema definitions.
+To change the database structure:
+1. Update the schemas in this file
+2. Run ./scripts/backup_db.sh --reset
+3. Restart the application
 """
 
 from typing import Dict, Any
@@ -54,51 +56,53 @@ def get_database_schema() -> Dict[str, Any]:
                 }
             }
         },
-        "behavioral_pattern": {
-            "description": "A recurring pattern of behavior",
+        "activity_log": {
+            "description": "Logs of user activities including screenshots, key/mouse clicks, and open windows",
             "properties": {
                 "id": {
                     "type": "string",
                     "maxLength": 30,
                     "pattern": "^[a-z0-9_]+$",
-                    "description": "Short, descriptive identifier using lowercase letters, numbers, and underscores"
+                    "description": "Unique identifier for the activity log"
                 },
-                "type": {"type": "string"},
-                "content": {"type": "string"},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                "metadata": {
-                    "type": "object",
-                    "properties": {
-                        "context": {"type": "string"},
-                        "frequency": {"type": "string"},
-                        "triggers": {"type": "string"},
-                        "analysis": {"type": "string"},
-                        "impact": {"type": "string"},
-                        "evidence": {"type": "string"}
-                    }
-                }
-            }
-        },
-        "relationship": {
-            "description": "A relationship between two entities",
-            "properties": {
-                "id": {
+                "timestamp": {
                     "type": "string",
-                    "maxLength": 30,
-                    "pattern": "^[a-z0-9_]+$",
-                    "description": "Short, descriptive identifier using lowercase letters, numbers, and underscores"
+                    "format": "date-time",
+                    "description": "Timestamp of the activity log"
                 },
-                "type": {"type": "string"},
-                "from_id": {"type": "string"},
-                "to_id": {"type": "string"},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                "metadata": {
-                    "type": "object",
-                    "properties": {
-                        "nature": {"type": "string"},
-                        "strength": {"type": "number", "minimum": 0, "maximum": 1},
-                        "evidence": {"type": "string"}
-                    }
+                "screenshot": {
+                    "type": "string",
+                    "description": "Base64 encoded screenshot image"
+                },
+                "key_clicks": {
+                    "type": "array",
+                    "description": "List of keys pressed",
+                    "items": {"type": "string"}
+                },
+                "mouse_clicks": {
+                    "type": "array",
+                    "description": "List of mouse click events",
+                    "items": {"type": "string"}
+                },
+                "open_windows": {
+                    "type": "array",
+                    "description": "List of currently open windows",
+                    "items": {"type": "string"}
+                },
+                "keys_pressed_count": {
+                    "type": "integer",
+                    "description": "Total number of keys pressed",
+                    "default": 0
+                },
+                "clicks_count": {
+                    "type": "integer",
+                    "description": "Total number of mouse clicks",
+                    "default": 0
+                },
+                "scrolls_count": {
+                    "type": "integer",
+                    "description": "Total number of scroll events",
+                    "default": 0
                 }
             }
         }
@@ -119,19 +123,24 @@ def get_ontology_schema() -> Dict[str, Any]:
         "concepts": {
             "user": {"description": "A person using the system"},
             "conversation": {"description": "A text-based interaction"},
-            "relationship": {"description": "A link between two things"},
-            "tag": {"description": "A label to categorize data"}
+            "personality_trait": {"description": "A characteristic or behavior pattern"},
+            "activity": {"description": "A logged user activity"}
         },
         "relationships": {
-            "related_to": {
-                "description": "Represents some relationship between two items",
-                "source_type": "user",
-                "target_type": "conversation"
-            },
-            "tagged_with": {
-                "description": "Marks which items are tagged with which labels",
+            "exhibits": {
+                "description": "Shows a personality trait in conversation",
                 "source_type": "conversation",
-                "target_type": "tag"
+                "target_type": "personality_trait"
+            },
+            "correlates_with": {
+                "description": "Related to another trait",
+                "source_type": "personality_trait",
+                "target_type": "personality_trait"
+            },
+            "demonstrates": {
+                "description": "Shows a trait through activity",
+                "source_type": "activity",
+                "target_type": "personality_trait"
             }
         },
         "data_types": {
@@ -139,5 +148,6 @@ def get_ontology_schema() -> Dict[str, Any]:
             "text": {"description": "Text value"},
             "json": {"description": "JSON object"},
             "timestamp": {"description": "Date and time value"},
+            "image": {"description": "Base64 encoded image"}
         }
     }

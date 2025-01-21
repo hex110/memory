@@ -112,6 +112,7 @@ A Python-based project for managing and analyzing conversations using Language L
     - **database/**: Database connection and operations
     - **interfaces/**: API interface definitions
     - **schemas/**: Data model definitions
+        - **definitions.py**: Single source of truth for database schema
     - **tests/**: Unit and integration tests
 - **scripts/**: Utility scripts
     - `backup_db.sh`: Database backup and reset utility
@@ -162,6 +163,31 @@ Use `scripts/backup_db.sh` for database backups and resets:
     - Create a fresh database
 
     *Note:* Restart the application to initialize the new schema.
+
+## Schema Management
+
+The project uses a simple, direct schema management approach:
+
+1. **Schema Definition**:
+   - All database schemas are defined in `src/schemas/definitions.py`
+   - This file is the single source of truth for database structure
+   - Used by both database initialization and agent validation
+
+2. **Making Schema Changes**:
+   ```bash
+   # 1. Update schema in src/schemas/definitions.py
+   # 2. Backup and reset the database:
+   ./scripts/backup_db.sh --reset
+   # 3. Restart the application to apply new schema
+   ```
+
+3. **Database Reset**:
+   - Creates a backup of current data
+   - Drops all tables
+   - Recreates tables using current schema from definitions.py
+   - Fast and reliable way to update database structure
+
+This approach favors simplicity and maintainability over version tracking, making it ideal for active development.
 
 ## License
 

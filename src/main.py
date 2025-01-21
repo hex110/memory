@@ -138,7 +138,13 @@ def ensure_config_exists() -> str:
     return config_path
 
 def init_database(config: Dict[str, Any]) -> PostgreSQLDatabase:
-    """Initialize the database with schema."""
+    """Initialize the database with schema from definitions.py.
+    
+    This will:
+    1. Verify PostgreSQL is running
+    2. Create database if it doesn't exist
+    3. Create tables based on current schema
+    """
     logger.info("Initializing database...")
     try:
         # Verify PostgreSQL is running and database exists
@@ -164,97 +170,6 @@ def run_server():
         reload=True,  # Enable reload for development
         log_level="info"
     )
-
-def test_api_pipeline():
-    """Test the API pipeline with a sample personalization request."""
-    logger.info("Testing API pipeline...")
-    
-    # Wait for server to be ready
-    logger.info("Waiting for server to be ready...")
-    time.sleep(2)  # Give the server time to start
-    
-    max_retries = 5
-    retry_delay = 1
-    
-    for attempt in range(max_retries):
-        try:
-            # Test health endpoint first
-            health_response = requests.get("http://localhost:8000/health")
-            if health_response.status_code == 200:
-                logger.info("Server is healthy, proceeding with test")
-                break
-            else:
-                logger.warning(f"Server not ready (attempt {attempt + 1}/{max_retries})")
-                time.sleep(retry_delay)
-        except requests.exceptions.ConnectionError:
-            if attempt < max_retries - 1:
-                logger.warning(f"Server not ready (attempt {attempt + 1}/{max_retries})")
-                time.sleep(retry_delay)
-            else:
-                logger.error("Server failed to start")
-                raise
-    
-    # Test data following the PersonalizationRequest model
-    test_request = {
-        "context": {
-            "service_type": "blog",
-            "request_type": "customize",
-            "user_id": "test_user",
-            "parameters": {
-                "content_type": "technical",
-                "target_audience": "developers",
-                "estimated_read_time": "15 minutes"
-            }
-        },
-        "content": {
-            "type": "technical_blog",
-            "customization_aspects": [
-                "content_style",
-                "visual_preferences",
-                "code_examples"
-            ]
-        },
-        "preferences": [
-            "Prefers detailed technical explanations",
-            "Values code examples",
-            "Interested in performance optimization"
-        ],
-        "options": {
-            "style": ["tutorial", "deep-dive", "quick-tips"],
-            "format": ["markdown", "jupyter"]
-        }
-    }
-    
-    try:
-        # Send request to API
-        response = requests.post(
-            "http://localhost:8000/personalize",
-            json=test_request
-        )
-        
-        # Check response
-        if response.status_code == 200:
-            result = response.json()
-            logger.info("API test successful!")
-            logger.info("Response:")
-            logger.info(json.dumps(result, indent=2))
-            
-            # Validate response structure
-            assert "status" in result, "Missing status field"
-            assert "service_type" in result, "Missing service_type field"
-            assert "recommendations" in result, "Missing recommendations field"
-            assert "reasoning" in result, "Missing reasoning field"
-            assert "metadata" in result, "Missing metadata field"
-            
-            logger.info("Response validation passed!")
-        else:
-            logger.error(f"API test failed with status {response.status_code}")
-            logger.error(f"Error: {response.text}")
-            
-    except Exception as e:
-        logger.error(f"API test failed: {e}")
-        raise
-    
 
 def analyze_test_conversation(config_path: str, db: PostgreSQLDatabase):
     """Analyze the test conversation file."""
@@ -308,7 +223,7 @@ def main():
         
         # Initialize components
         db = init_database(config)
-
+        
         if args.analyze:
             analyze_test_conversation(config_path, db)
         elif args.server:
@@ -326,7 +241,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 # If I want to run tests in main, run server in different thread
 # server_thread = threading.Thread(target=run_server)
 #         server_thread.daemon = True  # Allow the thread to be killed when main 

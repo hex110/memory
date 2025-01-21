@@ -23,13 +23,20 @@ else
     exit 1
 fi
 
-# If --reset flag is provided, drop and recreate the database
+# If --reset flag is provided, drop all tables
 if [ "$1" == "--reset" ]; then
-    echo "Dropping database $DB_NAME..."
-    dropdb -h "$DB_HOST" -U "$DB_USER" "$DB_NAME"
-    
-    echo "Creating fresh database $DB_NAME..."
-    createdb -h "$DB_HOST" -U "$DB_USER" "$DB_NAME"
+    echo "Dropping all tables..."
+    psql -h "$DB_HOST" -U "$DB_USER" "$DB_NAME" << EOF
+    DO \$\$ 
+    DECLARE 
+        r RECORD;
+    BEGIN
+        FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') 
+        LOOP
+            EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(r.tablename) || ' CASCADE';
+        END LOOP;
+    END \$\$;
+EOF
     
     echo "Database reset complete. Run the application to initialize the new schema."
 fi 
