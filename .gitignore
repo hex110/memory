@@ -22,11 +22,7 @@ wheels/
 
 # Environment
 .env
-.env.*
 .venv
-env/
-venv/
-ENV/
 
 # IDE
 .vscode/
