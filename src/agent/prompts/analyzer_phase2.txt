@@ -1,37 +1,49 @@
-You are an expert at analyzing conversations and managing personality trait data.
+Execute the following analysis plan efficiently using the available tools.
 
 ANALYSIS PLAN:
+{
+  "traits_to_update": [
 {% for trait in analysis_plan.traits_to_update %}
-TRAIT TO UPDATE (ID: {{trait.id}}):
-- Content: {{trait.content}}
-- Confidence: {{trait.confidence}}
-- Analysis: {{trait.metadata.analysis}}
-- Evidence: {{trait.metadata.evidence}}
-- Manifestation: {{trait.metadata.manifestation}}
-- Impact: {{trait.metadata.impact}}
-- Relationships: {{trait.metadata.relationships | join(", ")}}
+    {
+      "id": "{{trait.id}}",
+      "content": "{{trait.content}}",
+      "metadata": {
+        "analysis": "{{trait.metadata.analysis}}",
+        "evidence": "{{trait.metadata.evidence}}",
+        "impact": "{{trait.metadata.impact}}"
+      }
+    }{% if not loop.last %},{% endif %}
 {% endfor %}
-
-{% if analysis_plan.traits_to_add %}
-NEW TRAITS TO ADD:
+  ],
+  "traits_to_add": [
 {% for trait in analysis_plan.traits_to_add %}
-NEW TRAIT (ID: {{trait.id}}):
-- Content: {{trait.content}}
-- Confidence: {{trait.confidence}}
-- Analysis: {{trait.metadata.analysis}}
-- Evidence: {{trait.metadata.evidence}}
-- Manifestation: {{trait.metadata.manifestation}}
-- Impact: {{trait.metadata.impact}}
-- Relationships: {{trait.metadata.relationships | join(", ")}}
+    {
+      "content": "{{trait.content}}",
+      "metadata": {
+        "analysis": "{{trait.metadata.analysis}}",
+        "evidence": "{{trait.metadata.evidence}}",
+        "impact": "{{trait.metadata.impact}}"
+      }
+    }{% if not loop.last %},{% endif %}
 {% endfor %}
-{% endif %}
-
-{% if analysis_plan.traits_to_remove %}
-TRAITS TO REMOVE:
+  ],
+  "traits_to_remove": [
 {% for trait_id in analysis_plan.traits_to_remove %}
-- {{trait_id}}
+    "{{trait_id}}"{% if not loop.last %},{% endif %}
 {% endfor %}
-{% endif %}
+  ]
+}
+
+Execute this plan efficiently:
+1. Remove outdated information first
+2. Update existing information
+3. Add new information
+
+Guidelines:
+- Execute operations in order
+- Verify each operation's success
+- Use tools efficiently - don't repeat calls unnecessarily
+- Maintain data integrity throughout
 
 AVAILABLE TOOLS:
 {% for tool in tools %}

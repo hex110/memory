@@ -21,9 +21,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Set specific loggers to DEBUG level
+# Set specific loggers to INFO level
 logging.getLogger('src.agent.analyzer_agent').setLevel(logging.INFO)
 logging.getLogger('src.agent.base_agent').setLevel(logging.INFO)
+logging.getLogger('litellm').setLevel(logging.WARNING)
+logging.getLogger('litellm.response').setLevel(logging.INFO)
+logging.getLogger('httpx').setLevel(logging.WARNING)
 
 def verify_postgres(config: Dict[str, Any]) -> None:
     """Verify PostgreSQL is running and database exists.
@@ -167,36 +170,68 @@ def main():
             ontology_manager=ontology
         )
         
-        # Test conversation for analysis
-        test_conversation = {
-            "id": "test_2",
-            "content": """
-            Assistant: Let's explore how you handle work and challenges. What's your approach to solving complex problems?
+        # Test conversations for analysis
+        test_conversations = [
+            {
+                "id": "test_1",
+                "content": """
+                Assistant: Let's explore how you handle work and challenges. What's your approach to solving complex problems?
 
-            User: I love diving into complex problems! I usually start by breaking them down into smaller pieces and creating a detailed plan. I get really excited about finding innovative solutions, even if it means taking some risks. Sometimes I can get so absorbed that I lose track of time.
+                User: I love diving into complex problems! I usually start by breaking them down into smaller pieces and creating a detailed plan. I get really excited about finding innovative solutions, even if it means taking some risks. Sometimes I can get so absorbed that I lose track of time.
 
-            Assistant: That's interesting! And how do you typically work with others in a team setting?
+                Assistant: That's interesting! And how do you typically work with others in a team setting?
 
-            User: I'm actually quite energetic in team settings and enjoy brainstorming sessions. I like to take initiative and propose new ideas, though sometimes I might come across as too enthusiastic. I do try to make sure everyone gets a chance to speak, but I often find myself naturally taking the lead.
+                User: I'm actually quite energetic in team settings and enjoy brainstorming sessions. I like to take initiative and propose new ideas, though sometimes I might come across as too enthusiastic. I do try to make sure everyone gets a chance to speak, but I often find myself naturally taking the lead.
 
-            Assistant: How do you handle setbacks or when things don't go according to plan?
+                Assistant: How do you handle setbacks or when things don't go according to plan?
 
-            User: I try to stay positive and see setbacks as learning opportunities. Sure, it can be frustrating initially, but I quickly start looking for alternative approaches. I'm pretty adaptable and don't mind changing course if something isn't working. That said, I can be a bit impatient sometimes when things move too slowly.
+                User: I try to stay positive and see setbacks as learning opportunities. Sure, it can be frustrating initially, but I quickly start looking for alternative approaches. I'm pretty adaptable and don't mind changing course if something isn't working. That said, I can be a bit impatient sometimes when things move too slowly.
 
-            Assistant: What about your learning style? How do you approach new skills or knowledge?
+                Assistant: What about your learning style? How do you approach new skills or knowledge?
 
-            User: I'm a very hands-on learner. I prefer jumping in and experimenting rather than reading long manuals. I get excited about learning new things and often have multiple projects or courses going at once. Sometimes I might start too many things at once, but I'm always eager to expand my knowledge and try new approaches.
-            """,
-            "timestamp": "2024-01-20T14:00:00Z",
-            "analyzed": False
-        }
+                User: I'm a very hands-on learner. I prefer jumping in and experimenting rather than reading long manuals. I get excited about learning new things and often have multiple projects or courses going at once. Sometimes I might start too many things at once, but I'm always eager to expand my knowledge and try new approaches.
+                """,
+                "timestamp": "2024-01-20T14:00:00Z",
+                "analyzed": False
+            },
+            {
+                "id": "test_2",
+                "content": """
+                Assistant: I'd like to understand how you navigate social situations and relationships. Could you tell me about how you typically interact in social gatherings?
+
+                User: Well, it's interesting... I tend to observe first before fully engaging. I enjoy social gatherings, but I need to get a feel for the dynamics. Sometimes I find myself playing different roles - like being the mediator when there's tension, or the one who draws out quieter people. But I also notice I need breaks to recharge, especially after intense social interactions.
+
+                Assistant: That's fascinating. How do you handle emotional situations, whether your own emotions or others'?
+
+                User: I've learned to be more mindful about emotions over time. I used to try to fix everything immediately, but now I recognize sometimes people just need someone to listen. I'm pretty good at reading subtle cues in others' behavior, though this sensitivity can sometimes be overwhelming. I process my own emotions by writing or going for long walks - it helps me understand what I'm really feeling and why.
+
+                Assistant: Could you share how you approach personal goals and growth?
+
+                User: I'm quite methodical about personal development, actually. I like to set structured goals but keep them flexible enough to adapt. I've noticed I'm most successful when I balance pushing myself with being realistic. The interesting part is that I often find myself achieving goals in unexpected ways - like starting a project for one reason and discovering it fulfills a completely different personal goal.
+
+                Assistant: How do you deal with conflicts or disagreements in your relationships?
+
+                User: That's evolved a lot for me. I used to avoid conflicts entirely, but I've learned that addressing issues early prevents bigger problems. I try to understand the other person's perspective first, though sometimes I catch myself preparing my response before they finish speaking - it's something I'm working on. I value harmony but not at the expense of authenticity. Sometimes I surprise myself by being quite firm on my boundaries, especially when it comes to core values.
+
+                Assistant: What about your approach to making important decisions?
+
+                User: It's a bit of a paradox, really. I gather lots of information and analyze thoroughly, but I also trust my intuition strongly. Sometimes I find myself making lists and weighing pros and cons, only to realize I knew the answer instinctively from the start. I tend to consider how my decisions might affect others, maybe sometimes too much. I've noticed I'm more confident with professional decisions than personal ones - there's an interesting disconnect there that I'm trying to understand better.
+
+                Assistant: How do you handle unexpected changes or disruptions to your plans?
+
+                User: *laughs* That's been a journey of growth! I used to get really thrown off by unexpected changes, but I've developed this sort of... flexible resilience, I guess you could call it. I still like having backup plans - actually, usually backup plans for my backup plans - but I've learned to find opportunities in chaos. Though I have to admit, I still sometimes catch myself trying to control things that really aren't controllable. It's interesting how often the unexpected detours end up leading to better outcomes than my original plans.
+                """,
+                "timestamp": "2024-01-21T15:30:00Z",
+                "analyzed": False
+            }
+        ]
         
-        # Run analysis on test conversation
-        logger.info("Running analysis on test conversation...")
-        result = analyzer.analyze_conversation(test_conversation)
-        
-        logger.info("Analysis complete:")
-        logger.info(json.dumps(result, indent=2))
+        # Run analysis on test conversations
+        for conversation in test_conversations:
+            logger.info(f"Running analysis on conversation {conversation['id']}...")
+            result = analyzer.analyze_conversation(conversation)
+            logger.info(f"Analysis complete for {conversation['id']}:")
+            logger.info(json.dumps(result, indent=2))
         
     except ConfigError as e:
         logger.error(f"Configuration error: {e}")

@@ -45,9 +45,6 @@ class BaseAgent(AgentInterface):
         Raises:
             ConfigError: If required config values are missing
         """
-        # Enable verbose logging for LiteLLM
-        litellm.set_verbose = True
-        
         # Enable JSON schema validation for Gemini
         litellm.enable_json_schema_validation = True
         

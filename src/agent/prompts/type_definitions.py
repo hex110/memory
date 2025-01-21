@@ -1,28 +1,60 @@
 """Type definitions for analyzer agent structured output."""
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 
 class TraitMetadataModel(BaseModel):
     """Pydantic model for trait metadata."""
-    analysis: str = Field(description="Analysis of why this trait is relevant")
-    evidence: str = Field(description="Evidence from the conversation supporting this trait")
-    manifestation: str = Field(description="How this trait manifests in behavior")
-    impact: str = Field(description="The impact of this trait on behavior and relationships")
-    relationships: List[str] = Field(description="Related traits or connections")
+    analysis: Optional[str] = Field(None, description="Analysis of why this trait is relevant")
+    evidence: Optional[str] = Field(None, description="Evidence from the conversation supporting this trait")
+    manifestation: Optional[str] = Field(None, description="How this trait manifests in behavior")
+    impact: Optional[str] = Field(None, description="The impact of this trait on behavior and relationships")
+    relationships: Optional[List[str]] = Field(None, description="Related traits or connections")
 
 class TraitModel(BaseModel):
     """Pydantic model for a personality trait."""
-    id: str = Field(description="Unique identifier for the trait")
+    id: Optional[str] = Field(None, description="Unique identifier for the trait", maxLength=30, pattern="^[a-z0-9_]+$")
     content: str = Field(description="Description of the trait")
-    confidence: float = Field(description="Confidence score between 0 and 1", ge=0, le=1)
-    metadata: TraitMetadataModel = Field(description="Additional metadata about the trait")
+    confidence: Optional[float] = Field(0.8, description="Confidence score between 0 and 1", ge=0, le=1)
+    metadata: Optional[TraitMetadataModel] = Field(None, description="Additional metadata about the trait")
+
+class BehavioralPatternMetadataModel(BaseModel):
+    """Pydantic model for behavioral pattern metadata."""
+    context: Optional[str] = Field(None, description="Context in which the pattern occurs")
+    frequency: Optional[str] = Field(None, description="How often the pattern occurs")
+    triggers: Optional[str] = Field(None, description="What triggers this behavioral pattern")
+    analysis: Optional[str] = Field(None, description="Analysis of why this pattern is relevant")
+    impact: Optional[str] = Field(None, description="The impact of this pattern on behavior")
+    evidence: Optional[str] = Field(None, description="Evidence supporting this pattern")
+
+class BehavioralPatternModel(BaseModel):
+    """Pydantic model for a behavioral pattern."""
+    id: Optional[str] = Field(None, description="Unique identifier for the pattern", maxLength=30, pattern="^[a-z0-9_]+$")
+    type: str = Field(description="Type of behavioral pattern")
+    content: str = Field(description="Description of the pattern")
+    confidence: Optional[float] = Field(0.8, description="Confidence score between 0 and 1", ge=0, le=1)
+    metadata: Optional[BehavioralPatternMetadataModel] = Field(None, description="Additional metadata about the pattern")
+
+class RelationshipMetadataModel(BaseModel):
+    """Pydantic model for relationship metadata."""
+    nature: Optional[str] = Field(None, description="Nature of the relationship")
+    strength: Optional[float] = Field(None, description="Strength of the relationship", ge=0, le=1)
+    evidence: Optional[str] = Field(None, description="Evidence supporting this relationship")
+
+class RelationshipModel(BaseModel):
+    """Pydantic model for a relationship between entities."""
+    id: Optional[str] = Field(None, description="Unique identifier for the relationship", maxLength=30, pattern="^[a-z0-9_]+$")
+    type: str = Field(description="Type of relationship")
+    from_id: str = Field(description="ID of the source entity")
+    to_id: str = Field(description="ID of the target entity")
+    confidence: Optional[float] = Field(0.8, description="Confidence score between 0 and 1", ge=0, le=1)
+    metadata: Optional[RelationshipMetadataModel] = Field(None, description="Additional metadata about the relationship")
 
 class AnalysisPlanModel(BaseModel):
     """Pydantic model for the analysis plan."""
-    traits_to_update: List[TraitModel] = Field(description="Traits that need to be updated")
-    traits_to_add: List[TraitModel] = Field(description="New traits to be added")
-    traits_to_remove: List[str] = Field(description="IDs of traits to be removed")
+    traits_to_update: List[TraitModel] = Field(default_factory=list, description="Traits that need to be updated")
+    traits_to_add: List[TraitModel] = Field(default_factory=list, description="New traits to be added")
+    traits_to_remove: List[str] = Field(default_factory=list, description="IDs of traits to be removed")
 
 # Function schemas for LLM
 ANALYSIS_FUNCTION_SCHEMA = {
@@ -39,7 +71,9 @@ ANALYSIS_FUNCTION_SCHEMA = {
                     "properties": {
                         "id": {
                             "type": "string",
-                            "description": "Unique identifier for the trait"
+                            "description": "Unique identifier for the trait",
+                            "maxLength": 30,
+                            "pattern": "^[a-z0-9_]+$"
                         },
                         "content": {
                             "type": "string",
@@ -78,11 +112,10 @@ ANALYSIS_FUNCTION_SCHEMA = {
                                         "type": "string"
                                     }
                                 }
-                            },
-                            "required": ["analysis", "evidence", "manifestation", "impact", "relationships"]
+                            }
                         }
                     },
-                    "required": ["id", "content", "confidence", "metadata"]
+                    "required": ["content"]
                 }
             },
             "traits_to_add": {
@@ -91,19 +124,9 @@ ANALYSIS_FUNCTION_SCHEMA = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "id": {
-                            "type": "string",
-                            "description": "Unique identifier for the trait"
-                        },
                         "content": {
                             "type": "string",
                             "description": "Description of the trait"
-                        },
-                        "confidence": {
-                            "type": "number",
-                            "description": "Confidence score between 0 and 1",
-                            "minimum": 0,
-                            "maximum": 1
                         },
                         "metadata": {
                             "type": "object",
@@ -132,11 +155,10 @@ ANALYSIS_FUNCTION_SCHEMA = {
                                         "type": "string"
                                     }
                                 }
-                            },
-                            "required": ["analysis", "evidence", "manifestation", "impact", "relationships"]
+                            }
                         }
                     },
-                    "required": ["id", "content", "confidence", "metadata"]
+                    "required": ["content"]
                 }
             },
             "traits_to_remove": {
@@ -146,7 +168,6 @@ ANALYSIS_FUNCTION_SCHEMA = {
                     "type": "string"
                 }
             }
-        },
-        "required": ["traits_to_update", "traits_to_add", "traits_to_remove"]
+        }
     }
 } 

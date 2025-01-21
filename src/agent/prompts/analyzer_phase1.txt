@@ -1,41 +1,54 @@
-You are an expert at analyzing conversations and extracting personality traits and behavioral patterns.
+Analyze the following conversation and identify key information that should be stored or updated.
 
 CONVERSATION:
 {{conversation.content}}
 
 {% if existing_traits %}
-EXISTING TRAITS IN DATABASE:
+EXISTING DATA:
 {% for trait in existing_traits %}
 - {{trait.content}} (ID: {{trait.id}})
   {% if trait.metadata is defined %}
   Analysis: {{trait.metadata.analysis}}
   Evidence: {{trait.metadata.evidence}}
-  Manifestation: {{trait.metadata.manifestation}}
   Impact: {{trait.metadata.impact}}
   {% endif %}
 {% endfor %}
 {% endif %}
 
-AVAILABLE TOOLS:
-{% for tool in tools %}
-- {{tool.name}}: {{tool.description}}
-{% endfor %}
+Your task is to analyze this conversation and determine what information needs to be updated or added. Consider:
+1. What existing information needs updating with new evidence?
+2. What new information should be added?
+3. What information is no longer accurate?
 
-Your task is to analyze this conversation and provide a structured analysis of personality traits and behavioral patterns. Your response should be a JSON object containing:
+Guidelines for trait identification:
+- Use short, descriptive IDs (e.g., "problem_solving", "team_dynamics", "learning_style")
+- Focus on core concepts rather than full descriptions in IDs
+- Keep IDs under 30 characters, using underscores between words
 
-1. traits_to_update: Array of existing traits that need updating with new evidence or analysis
-2. traits_to_add: Array of new traits discovered in this conversation
-3. traits_to_remove: Array of trait IDs that are no longer relevant or accurate
+Provide your analysis in this exact format:
+{
+  "traits_to_update": [
+    {
+      "id": "problem_solving",  // Example of a good, concise ID
+      "content": "updated content",
+      "metadata": {
+        "analysis": "why this update matters",
+        "evidence": "specific conversation evidence",
+        "impact": "effect on understanding"
+      }
+    }
+  ],
+  "traits_to_add": [
+    {
+      "content": "new information",
+      "metadata": {
+        "analysis": "why this is significant",
+        "evidence": "supporting conversation evidence",
+        "impact": "how this affects context"
+      }
+    }
+  ],
+  "traits_to_remove": ["id1", "id2"]
+}
 
-Each trait should include:
-- id: A unique identifier
-- content: The trait description
-- confidence: A score between 0 and 1
-- metadata:
-  - analysis: Why this trait is relevant
-  - evidence: Specific examples from the conversation
-  - manifestation: How this trait typically manifests
-  - impact: The effect on behavior and relationships
-  - relationships: Array of related traits
-
-Analyze the conversation thoroughly and provide your structured response. 
+Focus on quality over quantity. Only include information that adds meaningful value to our understanding. 

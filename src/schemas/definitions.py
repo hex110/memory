@@ -31,16 +31,25 @@ def get_database_schema() -> Dict[str, Any]:
         "personality_trait": {
             "description": "A personality trait or characteristic",
             "properties": {
-                "id": {"type": "string"},
-                "type": {"type": "string"},
+                "id": {
+                    "type": "string",
+                    "maxLength": 30,
+                    "pattern": "^[a-z0-9_]+$",
+                    "description": "Short, descriptive identifier using lowercase letters, numbers, and underscores"
+                },
                 "content": {"type": "string"},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                 "metadata": {
                     "type": "object",
                     "properties": {
-                        "context": {"type": "string"},
-                        "relevance": {"type": "string"},
-                        "manifestation": {"type": "string"}
+                        "analysis": {"type": "string"},
+                        "evidence": {"type": "string"},
+                        "manifestation": {"type": "string"},
+                        "impact": {"type": "string"},
+                        "relationships": {
+                            "type": "array",
+                            "items": {"type": "string"}
+                        }
                     }
                 }
             }
@@ -48,7 +57,12 @@ def get_database_schema() -> Dict[str, Any]:
         "behavioral_pattern": {
             "description": "A recurring pattern of behavior",
             "properties": {
-                "id": {"type": "string"},
+                "id": {
+                    "type": "string",
+                    "maxLength": 30,
+                    "pattern": "^[a-z0-9_]+$",
+                    "description": "Short, descriptive identifier using lowercase letters, numbers, and underscores"
+                },
                 "type": {"type": "string"},
                 "content": {"type": "string"},
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
@@ -57,7 +71,10 @@ def get_database_schema() -> Dict[str, Any]:
                     "properties": {
                         "context": {"type": "string"},
                         "frequency": {"type": "string"},
-                        "triggers": {"type": "string"}
+                        "triggers": {"type": "string"},
+                        "analysis": {"type": "string"},
+                        "impact": {"type": "string"},
+                        "evidence": {"type": "string"}
                     }
                 }
             }
@@ -65,7 +82,12 @@ def get_database_schema() -> Dict[str, Any]:
         "relationship": {
             "description": "A relationship between two entities",
             "properties": {
-                "id": {"type": "string"},
+                "id": {
+                    "type": "string",
+                    "maxLength": 30,
+                    "pattern": "^[a-z0-9_]+$",
+                    "description": "Short, descriptive identifier using lowercase letters, numbers, and underscores"
+                },
                 "type": {"type": "string"},
                 "from_id": {"type": "string"},
                 "to_id": {"type": "string"},

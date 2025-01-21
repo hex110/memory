@@ -89,6 +89,26 @@ class AnalyzerAgent(BaseAgent):
         """
         return kwargs
     
+    def _generate_trait_id(self, content: str) -> str:
+        """Generate a short, consistent ID from trait content.
+        
+        Args:
+            content: The trait content to generate ID from
+            
+        Returns:
+            A short, consistent ID string
+        """
+        # Take first 3-4 significant words
+        words = content.lower().split()[:4]
+        # Remove common words and punctuation
+        stop_words = {'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'}
+        words = [w for w in words if w not in stop_words]
+        # Create base ID from first 2-3 meaningful words
+        base_id = '_'.join(words[:3])
+        # Clean up any remaining punctuation and normalize
+        base_id = ''.join(c if c.isalnum() or c == '_' else '' for c in base_id)
+        return base_id[:30]  # Limit length
+    
     def _analyze_phase1(self, conv_data: Dict[str, Any]) -> AnalysisPlanModel:
         """First phase: Analyze conversation and create a plan.
         
@@ -122,6 +142,9 @@ class AnalyzerAgent(BaseAgent):
             system_prompt=system_prompt
         )
         
+        # Log the LLM response
+        logger.info(f"LLM Analysis Response: {response}")
+        
         # Parse and validate response
         try:
             return self.validate_function_response(response, AnalysisPlanModel)
@@ -142,28 +165,69 @@ class AnalyzerAgent(BaseAgent):
         logger.debug("=== Starting Analysis Phase 2 ===")
         
         try:
-            # Process removals
+            # Prepare context for execution
+            context = {
+                "conversation": conv_data,
+                "analysis_plan": analysis_plan,
+                "tools": self.tool_schemas
+            }
+            
+            # Load prompts
+            system_prompt = self.load_prompt("analyzer_system", context)
+            execution_prompt = self.load_prompt("analyzer_phase2", context)
+            
+            # Call LLM to execute plan with function calling
+            logger.debug("Executing analysis plan with LLM...")
+            response = self.call_llm(
+                execution_prompt,
+                temperature=0.3,  # Lower temperature for more precise execution
+                system_prompt=system_prompt
+            )
+            
+            # Log the LLM response
+            logger.info(f"LLM Execution Response: {response}")
+            
+            # Execute the analysis plan
+            
+            # 1. Process removals
             for trait_id in analysis_plan.traits_to_remove:
                 try:
                     self.db_tools.remove_entity("personality_trait", trait_id)
+                    logger.info(f"Removed trait: {trait_id}")
                 except Exception as e:
                     logger.error(f"Failed to remove trait {trait_id}: {e}")
             
-            # Process updates
+            # 2. Process updates
             for trait in analysis_plan.traits_to_update:
                 try:
-                    self.db_tools.update_entity("personality_trait", trait.id, trait.model_dump())
+                    data = {
+                        "id": trait.id,
+                        "content": trait.content,
+                        "confidence": trait.confidence or 0.8,
+                        "metadata": trait.metadata.dict() if trait.metadata else {}
+                    }
+                    self.db_tools.update_entity("personality_trait", trait.id, data)
+                    logger.info(f"Updated trait: {trait.id}")
                 except Exception as e:
                     logger.error(f"Failed to update trait {trait.id}: {e}")
             
-            # Process additions
+            # 3. Process additions
             for trait in analysis_plan.traits_to_add:
                 try:
-                    self.db_tools.add_entity("personality_trait", trait.id, trait.model_dump())
+                    # Generate a unique ID for new traits
+                    trait_id = self._generate_trait_id(trait.content)
+                    data = {
+                        "id": trait_id,
+                        "content": trait.content,
+                        "confidence": trait.confidence or 0.8,
+                        "metadata": trait.metadata.dict() if trait.metadata else {}
+                    }
+                    self.db_tools.add_entity("personality_trait", trait_id, data)
+                    logger.info(f"Added trait: {trait_id}")
                 except Exception as e:
-                    logger.error(f"Failed to add trait {trait.id}: {e}")
+                    logger.error(f"Failed to add trait: {e}")
             
-            # Mark conversation as analyzed
+            # After execution, mark conversation as analyzed
             try:
                 conv_data["analyzed"] = True
                 self.db_tools.update_entity("conversation", conv_data["id"], conv_data)

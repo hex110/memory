@@ -12,7 +12,7 @@ def get_logger(name: str) -> logging.Logger:
         logging.Logger: Configured logger instance.
     """
     logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)  # Set minimum log level
+    logger.setLevel(logging.INFO)  # Set minimum log level to INFO
     
     # Only add handler if the logger doesn't already have handlers
     if not logger.handlers:
