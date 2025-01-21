@@ -5,8 +5,8 @@ import time
 import logging
 from typing import Dict, Any, List, Optional, Callable
 from functools import wraps
-from src.database.database_interface import DatabaseInterface
-from src.ontology.ontology_manager import OntologyManager
+from src.interfaces.postgresql import DatabaseInterface
+from src.ontology.manager import OntologyManager
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -53,6 +53,13 @@ def track_operation(operation_type: str, method_name: str) -> Callable:
         return wrapper
     return decorator
 
+def tool_schema(schema: Dict[str, Any]) -> Callable:
+    """Decorator to attach a schema to a method."""
+    def decorator(func: Callable) -> Callable:
+        func.__schema__ = schema
+        return func
+    return decorator
+
 class AgentDatabaseTools:
     """Provides safe, role-specific database access methods for agents.
     
@@ -68,7 +75,7 @@ class AgentDatabaseTools:
     ROLE_PERMISSIONS = {
         "analyzer": {
             "read_methods": ["get_entity", "get_entities", "get_schema"],
-            "write_methods": ["add_entity", "update_entity"]
+            "write_methods": ["add_entity", "update_entity", "remove_entity"]
         },
         "curator": {
             "read_methods": ["get_entity", "get_entities", "get_schema"],
@@ -76,22 +83,219 @@ class AgentDatabaseTools:
         }
     }
     
+    # Tool Schemas
+    TOOL_SCHEMAS = {
+        "get_entity": {
+            "name": "get_entity",
+            "description": "Get a single entity by ID",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_type": {
+                        "type": "string",
+                        "description": "Type of entity to get"
+                    },
+                    "entity_id": {
+                        "type": "string", 
+                        "description": "ID of entity to get"
+                    }
+                },
+                "required": ["entity_type", "entity_id"]
+            }
+        },
+        "get_entities": {
+            "name": "get_entities",
+            "description": "Get all entities of a type",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_type": {
+                        "type": "string",
+                        "description": "Type of entities to get"
+                    }
+                },
+                "required": ["entity_type"]
+            }
+        },
+        "get_schema": {
+            "name": "get_schema",
+            "description": "Get schema definition for an entity type or all schemas",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_type": {
+                        "type": "string",
+                        "description": "Type to get schema for (optional)"
+                    }
+                }
+            }
+        },
+        "add_entity": {
+            "name": "add_entity",
+            "description": "Add a new entity",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_type": {
+                        "type": "string",
+                        "description": "Type of entity to add"
+                    },
+                    "entity_id": {
+                        "type": "string",
+                        "description": "ID for the new entity"
+                    },
+                    "data": {
+                        "type": "object",
+                        "description": "Entity data",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": "Main content of the entity"
+                            },
+                            "confidence": {
+                                "type": "number",
+                                "description": "Confidence score between 0 and 1",
+                                "minimum": 0,
+                                "maximum": 1
+                            },
+                            "metadata": {
+                                "type": "object",
+                                "description": "Additional metadata",
+                                "properties": {
+                                    "analysis": {
+                                        "type": "string",
+                                        "description": "Analysis of the entity"
+                                    },
+                                    "evidence": {
+                                        "type": "string",
+                                        "description": "Supporting evidence"
+                                    },
+                                    "manifestation": {
+                                        "type": "string",
+                                        "description": "How the trait manifests"
+                                    },
+                                    "impact": {
+                                        "type": "string",
+                                        "description": "Impact on behavior"
+                                    },
+                                    "relationships": {
+                                        "type": "array",
+                                        "description": "Related traits",
+                                        "items": {
+                                            "type": "string"
+                                        }
+                                    }
+                                },
+                                "required": ["analysis", "evidence", "manifestation", "impact", "relationships"]
+                            }
+                        },
+                        "required": ["content", "confidence", "metadata"]
+                    }
+                },
+                "required": ["entity_type", "entity_id", "data"]
+            }
+        },
+        "update_entity": {
+            "name": "update_entity",
+            "description": "Update an existing entity",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_type": {
+                        "type": "string",
+                        "description": "Type of entity to update"
+                    },
+                    "entity_id": {
+                        "type": "string",
+                        "description": "ID of entity to update"
+                    },
+                    "data": {
+                        "type": "object",
+                        "description": "Updated entity data",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": "Main content of the entity"
+                            },
+                            "confidence": {
+                                "type": "number",
+                                "description": "Confidence score between 0 and 1",
+                                "minimum": 0,
+                                "maximum": 1
+                            },
+                            "metadata": {
+                                "type": "object",
+                                "description": "Additional metadata",
+                                "properties": {
+                                    "analysis": {
+                                        "type": "string",
+                                        "description": "Analysis of the entity"
+                                    },
+                                    "evidence": {
+                                        "type": "string",
+                                        "description": "Supporting evidence"
+                                    },
+                                    "manifestation": {
+                                        "type": "string",
+                                        "description": "How the trait manifests"
+                                    },
+                                    "impact": {
+                                        "type": "string",
+                                        "description": "Impact on behavior"
+                                    },
+                                    "relationships": {
+                                        "type": "array",
+                                        "description": "Related traits",
+                                        "items": {
+                                            "type": "string"
+                                        }
+                                    }
+                                },
+                                "required": ["analysis", "evidence", "manifestation", "impact", "relationships"]
+                            }
+                        },
+                        "required": ["content", "confidence", "metadata"]
+                    }
+                },
+                "required": ["entity_type", "entity_id", "data"]
+            }
+        },
+        "remove_entity": {
+            "name": "remove_entity",
+            "description": "Remove an entity by ID",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_type": {
+                        "type": "string",
+                        "description": "Type of entity to remove"
+                    },
+                    "entity_id": {
+                        "type": "string",
+                        "description": "ID of entity to remove"
+                    }
+                },
+                "required": ["entity_type", "entity_id"]
+            }
+        }
+    }
+    
     def __init__(self, db_interface: DatabaseInterface, 
                  ontology_manager: OntologyManager,
                  role: str):
-        """Initialize the tools manager.
+        """Initialize the tools wrapper.
         
         Args:
-            db_interface: Database interface instance
-            ontology_manager: Ontology manager instance
-            role: Agent role determining available methods
-        
+            db_interface: Database interface to use
+            ontology_manager: Ontology manager to use
+            role: Role to determine available methods
+            
         Raises:
             ValueError: If role is not recognized
         """
         if role not in self.ROLE_PERMISSIONS:
             raise ValueError(f"Unknown role: {role}")
-        
+            
         self.db = db_interface
         self.ontology = ontology_manager
         self.role = role
@@ -110,15 +314,13 @@ class AgentDatabaseTools:
         """Get JSON schemas for tools available to this role."""
         schemas = []
         all_methods = (
-            [(name, "read") for name in self.permissions["read_methods"]] +
-            [(name, "write") for name in self.permissions["write_methods"]]
+            self.permissions["read_methods"] + 
+            self.permissions["write_methods"]
         )
         
-        for method_name, op_type in all_methods:
-            if hasattr(self, method_name):
-                method = getattr(self, method_name)
-                if hasattr(method, "__schema__"):
-                    schemas.append(method.__schema__)
+        for method_name in all_methods:
+            if method_name in self.TOOL_SCHEMAS:
+                schemas.append(self.TOOL_SCHEMAS[method_name])
         
         return schemas
     
@@ -138,20 +340,39 @@ class AgentDatabaseTools:
                 f"Role '{self.role}' cannot {operation_type} using {method_name}"
             )
     
+    def _normalize_entity_id(self, entity_id: str) -> str:
+        """Normalize entity ID to a consistent format.
+        
+        Args:
+            entity_id: Raw entity ID
+            
+        Returns:
+            str: Normalized entity ID
+        """
+        # Convert to lowercase and replace spaces with underscores
+        normalized = entity_id.lower().replace(' ', '_')
+        # Remove any special characters except underscores
+        normalized = ''.join(c for c in normalized if c.isalnum() or c == '_')
+        return normalized
+
     # Tool Implementations
     @track_operation("read", "get_entity")
+    @tool_schema(TOOL_SCHEMAS["get_entity"])
     def get_entity(self, entity_type: str, entity_id: str) -> Dict[str, Any]:
         """Get an entity from the database."""
         self._check_permission("get_entity", "read")
-        return self.db.get_entity(entity_type, entity_id)
+        normalized_id = self._normalize_entity_id(entity_id)
+        return self.db.get_entity(entity_type, normalized_id)
     
     @track_operation("read", "get_entities")
+    @tool_schema(TOOL_SCHEMAS["get_entities"])
     def get_entities(self, entity_type: str) -> List[Dict[str, Any]]:
         """Get all entities of a type."""
         self._check_permission("get_entities", "read")
         return self.db.get_entities(entity_type)
     
     @track_operation("read", "get_schema")
+    @tool_schema(TOOL_SCHEMAS["get_schema"])
     def get_schema(self, entity_type: Optional[str] = None) -> Dict[str, Any]:
         """Get schema for an entity type or all schemas."""
         self._check_permission("get_schema", "read")
@@ -160,110 +381,50 @@ class AgentDatabaseTools:
         return self.ontology.schemas
     
     @track_operation("write", "add_entity")
+    @tool_schema(TOOL_SCHEMAS["add_entity"])
     def add_entity(self, entity_type: str, entity_id: str,
                   data: Dict[str, Any]) -> None:
         """Add a new entity to the database."""
         self._check_permission("add_entity", "write")
-        return self.db.add_entity(entity_type, entity_id, data)
+        normalized_id = self._normalize_entity_id(entity_id)
+        return self.db.add_entity(entity_type, normalized_id, data)
     
     @track_operation("write", "update_entity")
+    @tool_schema(TOOL_SCHEMAS["update_entity"])
     def update_entity(self, entity_type: str, entity_id: str,
                      data: Dict[str, Any]) -> None:
         """Update an existing entity."""
         self._check_permission("update_entity", "write")
-        return self.db.update_entity(entity_type, entity_id, data)
-    
-    # Tool Schemas
-    _schema_get_entity = {
-        "name": "get_entity",
-        "description": "Get an entity from the database by type and ID",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "entity_type": {
-                    "type": "string",
-                    "description": "Type of entity to retrieve"
-                },
-                "entity_id": {
-                    "type": "string",
-                    "description": "ID of the entity"
-                }
-            },
-            "required": ["entity_type", "entity_id"]
-        }
-    }
-    
-    _schema_get_entities = {
-        "name": "get_entities",
-        "description": "Get all entities of a specific type",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "entity_type": {
-                    "type": "string",
-                    "description": "Type of entities to retrieve"
-                }
-            },
-            "required": ["entity_type"]
-        }
-    }
-    
-    _schema_get_schema = {
-        "name": "get_schema",
-        "description": "Get schema definition for an entity type or all schemas",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "entity_type": {
-                    "type": "string",
-                    "description": "Type to get schema for (optional)"
-                }
-            }
-        }
-    }
-    
-    _schema_add_entity = {
-        "name": "add_entity",
-        "description": "Add a new entity to the database",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "entity_type": {
-                    "type": "string",
-                    "description": "Type of entity to add"
-                },
-                "entity_id": {
-                    "type": "string",
-                    "description": "ID for the new entity"
-                },
-                "data": {
-                    "type": "object",
-                    "description": "Entity data matching the schema"
-                }
-            },
-            "required": ["entity_type", "entity_id", "data"]
-        }
-    }
-    
-    _schema_update_entity = {
-        "name": "update_entity",
-        "description": "Update an existing entity",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "entity_type": {
-                    "type": "string",
-                    "description": "Type of entity to update"
-                },
-                "entity_id": {
-                    "type": "string",
-                    "description": "ID of the entity"
-                },
-                "data": {
-                    "type": "object",
-                    "description": "New entity data"
-                }
-            },
-            "required": ["entity_type", "entity_id", "data"]
-        }
-    } 
+        normalized_id = self._normalize_entity_id(entity_id)
+        
+        try:
+            # Try to get existing entity first
+            existing = self.get_entity(entity_type, normalized_id)
+            if existing:
+                # Merge new data with existing data
+                merged_data = {**existing, **data}
+                return self.db.update_entity(entity_type, normalized_id, merged_data)
+        except Exception:
+            pass
+            
+        # If entity doesn't exist or get failed, try to add it
+        try:
+            return self.db.add_entity(entity_type, normalized_id, data)
+        except Exception as e:
+            if "duplicate key" in str(e):
+                # If add failed due to duplicate, try update again
+                return self.db.update_entity(entity_type, normalized_id, data)
+            raise
+
+    @track_operation("write", "remove_entity")
+    @tool_schema(TOOL_SCHEMAS["remove_entity"])
+    def remove_entity(self, entity_type: str, entity_id: str) -> None:
+        """Remove an entity from the database.
+        
+        Args:
+            entity_type: Type of entity to remove
+            entity_id: ID of entity to remove
+        """
+        self._check_permission("remove_entity", "write")
+        entity_id = self._normalize_entity_id(entity_id)
+        self.db.delete(entity_type, entity_id) 

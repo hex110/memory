@@ -1,12 +1,15 @@
 import psycopg2
 from typing import Any, Dict, List, Optional, Union
-from src.database.database_interface import DatabaseInterface
+from src.interfaces.postgresql import DatabaseInterface
 from src.utils.exceptions import DatabaseError
 from src.utils.config import get_config, load_config
 from src.utils.api import generate_id
 from psycopg2 import pool
 import json
 import uuid
+from src.schemas.definitions import get_database_schema
+from src.schemas.migrator import MigrationManager
+from src.schemas.validator import SchemaValidator
 
 class PostgreSQLDatabase(DatabaseInterface):
     """PostgreSQL implementation of the flexible database interface."""
@@ -213,3 +216,71 @@ class PostgreSQLDatabase(DatabaseInterface):
                 self._execute_query(query, (json.dumps(data), entity_id))
         except Exception as e:
             raise DatabaseError(f"Update failed: {e}")
+
+    def initialize_database(self) -> None:
+        """Initialize database tables and schemas.
+        
+        This method:
+        1. Creates tables based on schema definitions
+        2. Applies any pending migrations
+        3. Initializes schema tracking
+        """
+        try:
+            # Get schema definitions
+            schema_defs = get_database_schema()
+            
+            # Create base tables from schema
+            for collection_name, schema in schema_defs.items():
+                self.create_collection(collection_name, schema)
+            
+            # Create links table for relationships
+            self._execute_query("""
+                CREATE TABLE IF NOT EXISTS links (
+                    id TEXT PRIMARY KEY,
+                    from_collection TEXT NOT NULL,
+                    from_id TEXT NOT NULL,
+                    to_collection TEXT NOT NULL,
+                    to_id TEXT NOT NULL,
+                    link_type TEXT NOT NULL,
+                    metadata JSONB DEFAULT '{}',
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Create necessary indexes
+            self._execute_query("""
+                CREATE INDEX IF NOT EXISTS idx_links_from ON links(from_collection, from_id);
+                CREATE INDEX IF NOT EXISTS idx_links_to ON links(to_collection, to_id);
+                CREATE INDEX IF NOT EXISTS idx_links_type ON links(link_type);
+            """)
+            
+            # Initialize migration tracking
+            self._execute_query("""
+                CREATE TABLE IF NOT EXISTS schema_versions (
+                    id TEXT PRIMARY KEY DEFAULT 'current',
+                    version TEXT NOT NULL,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Store schemas in database registry
+            for collection_name, schema in schema_defs.items():
+                self.schemas[collection_name] = schema
+            
+            # Apply any pending migrations
+            validator = SchemaValidator()
+            migration_manager = MigrationManager("src/schemas/migrations", validator)
+            migration_manager.migrate(self, None)  # Migrate to latest version
+            
+        except Exception as e:
+            raise DatabaseError(f"Database initialization failed: {e}")
+            
+    def get_current_schema_version(self) -> str:
+        """Get the current schema version from the database."""
+        try:
+            result = self._execute_query(
+                "SELECT version FROM schema_versions WHERE id = 'current'"
+            )
+            return result[0]["version"] if result else "000"
+        except Exception:
+            return "000"  # Return initial version if table doesn't exist

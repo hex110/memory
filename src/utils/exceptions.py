@@ -1,18 +1,12 @@
+"""Custom exceptions for the system."""
+
 class ConfigError(Exception):
-    """Exception raised for configuration-related errors.
-    
-    This exception is raised when there are issues with loading, parsing,
-    or accessing configuration data.
-    """
+    """Raised when there is a configuration error."""
     pass
 
 
 class DatabaseError(Exception):
-    """Exception raised for database-related errors.
-    
-    This exception is raised when there are issues with database operations,
-    connections, or queries.
-    """
+    """Raised when a database operation fails."""
     pass
 
 
@@ -58,4 +52,14 @@ class ParsingError(Exception):
     This exception is raised when there are issues with parsing data,
     such as invalid formats or missing required fields.
     """
+    pass
+
+
+class ValidationError(Exception):
+    """Raised when schema validation fails."""
+    pass
+
+
+class MigrationError(Exception):
+    """Raised when a schema migration fails."""
     pass

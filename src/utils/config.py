@@ -29,11 +29,21 @@ def replace_env_vars(config: Dict) -> Dict:
     for key, value in config.items():
         if isinstance(value, dict):
             result[key] = replace_env_vars(value)
-        elif isinstance(value, str) and value.startswith('${') and value.endswith('}'):
-            env_var = value[2:-1]
-            if env_var not in os.environ:
-                raise ConfigError(f"Environment variable {env_var} not found")
-            result[key] = os.environ[env_var]
+        elif isinstance(value, str):
+            # Handle ${VAR} syntax
+            if value.startswith('${') and value.endswith('}'):
+                env_var = value[2:-1]
+                if env_var not in os.environ:
+                    raise ConfigError(f"Environment variable {env_var} not found")
+                result[key] = os.environ[env_var]
+            # Also handle $VAR syntax
+            elif value.startswith('$'):
+                env_var = value[1:]
+                if env_var not in os.environ:
+                    raise ConfigError(f"Environment variable {env_var} not found")
+                result[key] = os.environ[env_var]
+            else:
+                result[key] = value
         else:
             result[key] = value
     return result
@@ -110,6 +120,36 @@ def get_llm_config(config: Dict) -> Dict[str, Any]:
     return llm_config
 
 
+def get_provider_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Get provider-specific configuration.
+    
+    Args:
+        config: The configuration dictionary
+        
+    Returns:
+        Dict containing provider-specific configuration
+        
+    Raises:
+        ConfigError: If provider is not supported
+    """
+    provider = config["llm"].get("provider", "gemini").lower()
+    
+    if provider == "gemini":
+        return {
+            "base_url": "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent",
+            "api_key": os.environ.get("GEMINI_API_KEY"),
+            "model": "gemini-pro"
+        }
+    elif provider == "openrouter":
+        return {
+            "base_url": "https://openrouter.ai/api/v1/chat/completions",
+            "api_key": os.environ.get("OPENROUTER_API_KEY"),
+            "model": config["llm"].get("model", "google/gemini-2.0-flash-exp:free")
+        }
+    else:
+        raise ConfigError(f"Unsupported provider: {provider}")
+
+
 def get_api_key(config: Dict, override_key: Optional[str] = None) -> str:
     """Gets the API key from config or override.
     
@@ -123,9 +163,10 @@ def get_api_key(config: Dict, override_key: Optional[str] = None) -> str:
     Raises:
         ConfigError: If no API key is found.
     """
-    api_key = override_key or get_llm_config(config).get('api_key')
+    provider_config = get_provider_config(config)
+    api_key = override_key or provider_config['api_key']
     if not api_key:
-        raise ConfigError("API key not found in config or override")
+        raise ConfigError("API key not found in config, override, or environment")
     return api_key
 
 
@@ -139,7 +180,8 @@ def get_model(config: Dict, override_model: Optional[str] = None) -> str:
     Returns:
         str: The model name to use.
     """
-    return override_model or get_llm_config(config).get('model', 'google/gemini-2.0-flash-exp:free')
+    provider_config = get_provider_config(config)
+    return override_model or provider_config['model']
 
 
 def get_base_url(config: Dict, override_url: Optional[str] = None) -> str:
@@ -152,7 +194,8 @@ def get_base_url(config: Dict, override_url: Optional[str] = None) -> str:
     Returns:
         str: The base URL to use.
     """
-    return override_url or get_llm_config(config).get('base_url', 'https://openrouter.ai/api/v1/chat/completions')
+    provider_config = get_provider_config(config)
+    return override_url or provider_config['base_url']
 
 
 def is_dev_mode(config: Dict) -> bool:

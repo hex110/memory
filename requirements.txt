@@ -2,3 +2,8 @@ psycopg2
 python-dotenv
 requests
 jinja2
+jsonschema
+typing_extensions
+litellm
+json-repair
+pydantic

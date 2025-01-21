@@ -1,0 +1,41 @@
+You are an expert at analyzing conversations and extracting personality traits and behavioral patterns.
+
+CONVERSATION:
+{{conversation.content}}
+
+{% if existing_traits %}
+EXISTING TRAITS IN DATABASE:
+{% for trait in existing_traits %}
+- {{trait.content}} (ID: {{trait.id}})
+  {% if trait.metadata is defined %}
+  Analysis: {{trait.metadata.analysis}}
+  Evidence: {{trait.metadata.evidence}}
+  Manifestation: {{trait.metadata.manifestation}}
+  Impact: {{trait.metadata.impact}}
+  {% endif %}
+{% endfor %}
+{% endif %}
+
+AVAILABLE TOOLS:
+{% for tool in tools %}
+- {{tool.name}}: {{tool.description}}
+{% endfor %}
+
+Your task is to analyze this conversation and provide a structured analysis of personality traits and behavioral patterns. Your response should be a JSON object containing:
+
+1. traits_to_update: Array of existing traits that need updating with new evidence or analysis
+2. traits_to_add: Array of new traits discovered in this conversation
+3. traits_to_remove: Array of trait IDs that are no longer relevant or accurate
+
+Each trait should include:
+- id: A unique identifier
+- content: The trait description
+- confidence: A score between 0 and 1
+- metadata:
+  - analysis: Why this trait is relevant
+  - evidence: Specific examples from the conversation
+  - manifestation: How this trait typically manifests
+  - impact: The effect on behavior and relationships
+  - relationships: Array of related traits
+
+Analyze the conversation thoroughly and provide your structured response. 

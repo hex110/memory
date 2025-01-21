@@ -5,16 +5,21 @@ import json
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
-import requests
 from jinja2 import Environment, FileSystemLoader
-from src.utils.config import load_config
+
+import litellm
+from litellm import completion
+from json_repair import repair_json
+from src.utils.config import (
+    load_config, get_provider_config, ConfigError
+)
 from src.utils.exceptions import (
     APIError, APIConnectionError, APIResponseError,
-    APIAuthenticationError, ConfigError
+    APIAuthenticationError
 )
-from src.agent.agent_interface import AgentInterface, ToolSchema
-from src.database.database_interface import DatabaseInterface
-from src.ontology.ontology_manager import OntologyManager
+from src.interfaces.agent import AgentInterface, ToolSchema
+from src.interfaces.postgresql import DatabaseInterface
+from src.ontology.manager import OntologyManager
 from src.utils.agent_tools import AgentDatabaseTools
 
 class BaseAgent(AgentInterface):
@@ -40,17 +45,31 @@ class BaseAgent(AgentInterface):
         Raises:
             ConfigError: If required config values are missing
         """
+        # Enable verbose logging for LiteLLM
+        litellm.set_verbose = True
+        
+        # Enable JSON schema validation for Gemini
+        litellm.enable_json_schema_validation = True
+        
         self.config = load_config(config_path)
         
         # Validate required config
         if not self.config.get("llm"):
             raise ConfigError("Missing 'llm' section in config")
         
-        llm_config = self.config["llm"]
-        required_fields = ["api_key", "model", "base_url"]
-        missing_fields = [f for f in required_fields if not llm_config.get(f)]
-        if missing_fields:
-            raise ConfigError(f"Missing required LLM config fields: {', '.join(missing_fields)}")
+        # Get provider-specific configuration
+        provider_config = get_provider_config(self.config)
+        
+        # Set up environment variables for LiteLLM
+        provider = self.config["llm"].get("provider", "gemini").lower()
+        if provider == "gemini":
+            os.environ["GEMINI_API_KEY"] = provider_config["api_key"]
+            # Add gemini/ prefix for LiteLLM
+            self.model = "gemini/gemini-2.0-flash-exp"
+        else:
+            # For OpenRouter
+            os.environ["OPENROUTER_API_KEY"] = provider_config["api_key"]
+            self.model = provider_config["model"]
         
         self.env = Environment(loader=FileSystemLoader(prompt_folder))
         
@@ -103,77 +122,50 @@ class BaseAgent(AgentInterface):
         **kwargs
     ) -> str:
         """Call the LLM API with retries and tool support."""
-        max_retries = 2
-        first_error = None
-        base_url = self.config["llm"]["base_url"]
-        headers = {
-            "Authorization": f"Bearer {self.config['llm']['api_key']}",
-            "Content-Type": "application/json"
-        }
-        
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-        
-        # Add tool calling if tools are available
-        if self.tool_schemas:
-            kwargs["tools"] = [
-                {
-                    "type": "function",
-                    "function": schema
+        try:
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+            
+            # Configure function calling
+            if self.tool_schemas:
+                # Format tools according to Gemini's spec
+                tools = []
+                for schema in self.tool_schemas:
+                    tools.append({
+                        "type": "function",
+                        "function": {
+                            "name": schema["name"],
+                            "description": schema.get("description", ""),
+                            "parameters": schema["parameters"]
+                        }
+                    })
+                
+                # Set up tool configuration for Gemini
+                kwargs["tools"] = tools
+                kwargs["tool_config"] = {
+                    "function_calling_config": {
+                        "mode": "ANY"  # Force function calling
+                    }
                 }
-                for schema in self.tool_schemas
-            ]
-        
-        for attempt in range(max_retries):
-            try:
-                response = requests.post(
-                    base_url,
-                    headers=headers,
-                    json={
-                        "model": self.config["llm"]["model"],
-                        "messages": messages,
-                        "temperature": temperature,
-                        **kwargs
-                    },
-                    timeout=30
-                )
-                
-                if response.status_code == 401:
-                    raise APIAuthenticationError("Invalid API key")
-                
-                response.raise_for_status()
-                response_data = response.json()
-                
-                # Print response for debugging
-                print("\nAPI Response:", json.dumps(response_data, indent=2))
-                
-                # Handle tool calls
-                message = response_data.get("choices", [{}])[0].get("message", {})
-                if message.get("tool_calls") and self.available_tools:
-                    return self._handle_tool_calls(message, messages)
-                
-                return message.get("content", "")
-                
-            except requests.exceptions.Timeout as e:
-                first_error = first_error or e
-                time.sleep(2 ** attempt)  # Exponential backoff
-            except requests.exceptions.ConnectionError as e:
-                first_error = first_error or e
-                time.sleep(2 ** attempt)
-            except requests.exceptions.RequestException as e:
-                if response.status_code == 401:
-                    raise APIAuthenticationError("Invalid API key")
-                first_error = first_error or e
-                time.sleep(2 ** attempt)
-        
-        if isinstance(first_error, requests.exceptions.Timeout):
-            raise APIConnectionError("API request timed out") from first_error
-        elif isinstance(first_error, requests.exceptions.ConnectionError):
-            raise APIConnectionError("Failed to connect to API") from first_error
-        else:
-            raise APIResponseError("API request failed") from first_error
+            
+            response = completion(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                **kwargs
+            )
+            
+            # Handle tool calls if present
+            message = response.choices[0].message
+            if message.tool_calls and self.available_tools:
+                return self._handle_tool_calls(message, messages)
+            
+            return message.content or ""
+            
+        except Exception as e:
+            raise APIResponseError(f"Error calling LLM: {str(e)}") from e
     
     def _handle_tool_calls(
         self,
@@ -189,48 +181,83 @@ class BaseAgent(AgentInterface):
         Returns:
             str: The final response after tool calling
         """
-        while message.get("tool_calls"):
-            # Add assistant's message with tool calls
-            messages.append({
-                "role": "assistant",
-                "content": message.get("content"),
-                "tool_calls": message["tool_calls"]
-            })
-            
-            # Handle each tool call
-            for tool_call in message["tool_calls"]:
-                func_name = tool_call["function"]["name"]
-                func_args = json.loads(tool_call["function"]["arguments"])
+        # Add assistant's message with tool calls
+        messages.append({
+            "role": "assistant",
+            "content": message.get("content"),
+            "tool_calls": message.tool_calls
+        })
+        
+        # Handle each tool call
+        tool_responses = []
+        for tool_call in message.tool_calls:
+            try:
+                func_name = tool_call.function.name
+                # Use json-repair to handle malformed JSON
+                func_args = json.loads(repair_json(tool_call.function.arguments))
                 
                 # Call the function
                 function = self.available_tools[func_name]
                 function_response = function(**func_args)
                 
                 # Add tool response to messages
-                messages.append({
+                tool_response = {
                     "role": "tool",
                     "name": func_name,
-                    "tool_call_id": tool_call["id"],
+                    "tool_call_id": tool_call.id,
                     "content": json.dumps(function_response)
-                })
-            
-            # Get next action from LLM
-            response = requests.post(
-                self.config["llm"]["base_url"],
-                headers={
-                    "Authorization": f"Bearer {self.config['llm']['api_key']}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": self.config["llm"]["model"],
-                    "messages": messages,
-                    "tools": [{"type": "function", "function": schema} for schema in self.tool_schemas]
                 }
-            )
-            response.raise_for_status()
-            message = response.json()["choices"][0]["message"]
+                messages.append(tool_response)
+                tool_responses.append(function_response)
+                
+            except Exception as e:
+                print(f"Error handling tool call: {str(e)}")
+                error_response = {
+                    "role": "tool",
+                    "name": func_name if 'func_name' in locals() else "unknown",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps({"error": str(e)})
+                }
+                messages.append(error_response)
+                tool_responses.append({"error": str(e)})
         
-        return message.get("content", "")
+        # If only one tool call, return its response directly
+        if len(tool_responses) == 1:
+            return json.dumps(tool_responses[0])
+        
+        # Get final response from LLM for multiple tool calls
+        response = completion(
+            model=self.model,
+            messages=messages
+        )
+        
+        return response.choices[0].message.content or ""
+    
+    def validate_function_response(self, response: str, model_class: Any) -> Any:
+        """Validate and parse a function response using a Pydantic model.
+        
+        Args:
+            response: JSON string from function call
+            model_class: Pydantic model class to validate against
+            
+        Returns:
+            Validated Pydantic model instance
+            
+        Raises:
+            ValueError: If validation fails
+        """
+        try:
+            # Use json-repair to fix potentially malformed JSON
+            if isinstance(response, str):
+                data = json.loads(repair_json(response))
+            else:
+                data = response
+                
+            # Validate with Pydantic
+            return model_class.model_validate(data)
+            
+        except Exception as e:
+            raise ValueError(f"Failed to validate function response: {str(e)}")
     
     def execute(self) -> Any:
         """Execute the agent's primary function.

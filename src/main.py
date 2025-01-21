@@ -7,11 +7,12 @@ import psycopg2
 from typing import Dict, Any, Optional
 from pathlib import Path
 
-from src.database.relational_db import PostgreSQLDatabase
-from src.ontology.ontology_manager import OntologyManager
+from src.database.postgresql import PostgreSQLDatabase
+from src.ontology.manager import OntologyManager
 from src.agent.analyzer_agent import AnalyzerAgent
 from src.utils.config import load_config, ConfigError
 from src.utils.exceptions import DatabaseError
+from src.schemas.definitions import get_database_schema, get_ontology_schema
 
 # Set up logging
 logging.basicConfig(
@@ -20,42 +21,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def get_initial_schema() -> Dict[str, Any]:
-    """Get initial schema for the ontology.
-    
-    This defines the structure of our knowledge base.
-    """
-    return {
-        "conversation": {
-            "description": "A conversation between user and assistant",
-            "properties": {
-                "id": {"type": "string"},
-                "content": {"type": "string"},
-                "timestamp": {"type": "string", "format": "date-time"},
-                "analyzed": {"type": "boolean", "default": False}
-            }
-        },
-        "knowledge": {
-            "description": "A piece of extracted knowledge",
-            "properties": {
-                "id": {"type": "string"},
-                "type": {"type": "string"},
-                "content": {"type": "string"},
-                "source_conversation": {"type": "string"},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1}
-            }
-        },
-        "relationship": {
-            "description": "A relationship between two pieces of knowledge",
-            "properties": {
-                "id": {"type": "string"},
-                "type": {"type": "string"},
-                "from_id": {"type": "string"},
-                "to_id": {"type": "string"},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1}
-            }
-        }
-    }
+# Set specific loggers to DEBUG level
+logging.getLogger('src.agent.analyzer_agent').setLevel(logging.INFO)
+logging.getLogger('src.agent.base_agent').setLevel(logging.INFO)
 
 def verify_postgres(config: Dict[str, Any]) -> None:
     """Verify PostgreSQL is running and database exists.
@@ -134,9 +102,10 @@ def ensure_config_exists() -> str:
         default_config = {
             "environment": "development",
             "llm": {
-                "api_key": "YOUR_API_KEY_HERE",
-                "model": "google/gemini-2.0-flash-exp:free",
-                "base_url": "https://openrouter.ai/api/v1/chat/completions"
+                "provider": "gemini",  # or "openrouter"
+                "api_key": "${GEMINI_API_KEY}",  # Will be replaced with env var
+                "model": "gemini-2.0-flash-exp",
+                "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
             },
             "database": {
                 "host": "localhost",
@@ -169,51 +138,12 @@ def init_database(config: Dict[str, Any]) -> PostgreSQLDatabase:
         # Initialize database connection
         db = PostgreSQLDatabase(config["database"])
         
-        # Create necessary collections
-        collections = ["conversation", "knowledge", "relationship"]
-        for collection in collections:
-            db.create_collection(collection)
+        # Initialize database schema and tables
+        db.initialize_database()
         
         return db
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
-        raise
-
-def load_sample_data(db: PostgreSQLDatabase) -> None:
-    """Load sample conversation data for testing."""
-    logger.info("Loading sample data...")
-    try:
-        # Sample conversation
-        conversation = {
-            "id": "conv_001",
-            "content": """
-            User: What's the best way to handle errors in Python?
-            Assistant: There are several best practices for error handling in Python:
-            1. Use try/except blocks to catch specific exceptions
-            2. Avoid bare except clauses
-            3. Create custom exception classes for your application
-            4. Use context managers (with statements) for resource management
-            5. Always clean up resources in finally blocks
-            
-            Would you like me to explain any of these in more detail?
-            
-            User: Yes, could you explain custom exception classes?
-            Assistant: Custom exception classes help you create application-specific errors.
-            Here's an example:
-            
-            class DatabaseConnectionError(Exception):
-                pass
-            
-            This helps make your error handling more specific and meaningful.
-            """,
-            "timestamp": "2024-01-20T12:00:00Z",
-            "analyzed": False
-        }
-        
-        db.add_entity("conversation", conversation["id"], conversation)
-        logger.info("Sample data loaded successfully")
-    except Exception as e:
-        logger.error(f"Failed to load sample data: {e}")
         raise
 
 def main():
@@ -227,10 +157,7 @@ def main():
         
         # Initialize components
         db = init_database(config)
-        ontology = OntologyManager(initial_schema=get_initial_schema())
-        
-        # Load sample data
-        load_sample_data(db)
+        ontology = OntologyManager(initial_schema=get_ontology_schema())
         
         # Initialize analyzer agent
         analyzer = AnalyzerAgent(
@@ -240,9 +167,33 @@ def main():
             ontology_manager=ontology
         )
         
-        # Run analysis on unanalyzed conversations
-        logger.info("Running analysis...")
-        result = analyzer.execute()
+        # Test conversation for analysis
+        test_conversation = {
+            "id": "test_2",
+            "content": """
+            Assistant: Let's explore how you handle work and challenges. What's your approach to solving complex problems?
+
+            User: I love diving into complex problems! I usually start by breaking them down into smaller pieces and creating a detailed plan. I get really excited about finding innovative solutions, even if it means taking some risks. Sometimes I can get so absorbed that I lose track of time.
+
+            Assistant: That's interesting! And how do you typically work with others in a team setting?
+
+            User: I'm actually quite energetic in team settings and enjoy brainstorming sessions. I like to take initiative and propose new ideas, though sometimes I might come across as too enthusiastic. I do try to make sure everyone gets a chance to speak, but I often find myself naturally taking the lead.
+
+            Assistant: How do you handle setbacks or when things don't go according to plan?
+
+            User: I try to stay positive and see setbacks as learning opportunities. Sure, it can be frustrating initially, but I quickly start looking for alternative approaches. I'm pretty adaptable and don't mind changing course if something isn't working. That said, I can be a bit impatient sometimes when things move too slowly.
+
+            Assistant: What about your learning style? How do you approach new skills or knowledge?
+
+            User: I'm a very hands-on learner. I prefer jumping in and experimenting rather than reading long manuals. I get excited about learning new things and often have multiple projects or courses going at once. Sometimes I might start too many things at once, but I'm always eager to expand my knowledge and try new approaches.
+            """,
+            "timestamp": "2024-01-20T14:00:00Z",
+            "analyzed": False
+        }
+        
+        # Run analysis on test conversation
+        logger.info("Running analysis on test conversation...")
+        result = analyzer.analyze_conversation(test_conversation)
         
         logger.info("Analysis complete:")
         logger.info(json.dumps(result, indent=2))
