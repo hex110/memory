@@ -1,0 +1,31 @@
+Analyze the following personality data and provide customization recommendations for the given request.
+
+REQUEST:
+{{request}}
+
+PERSONALITY DATA:
+{% if personality_data.traits %}
+TRAITS:
+{% for trait in personality_data.traits %}
+- {{trait.content}}
+  {% if trait.metadata %}
+  Analysis: {{trait.metadata.analysis}}
+  Impact: {{trait.metadata.impact}}
+  {% endif %}
+{% endfor %}
+{% endif %}
+
+{% if personality_data.patterns %}
+BEHAVIORAL PATTERNS:
+{% for pattern in personality_data.patterns %}
+- {{pattern.content}}
+  {% if pattern.metadata %}
+  Context: {{pattern.metadata.context}}
+  Frequency: {{pattern.metadata.frequency}}
+  Impact: {{pattern.metadata.impact}}
+  {% endif %}
+{% endfor %}
+{% endif %}
+
+Based on this personality profile, provide customization recommendations that would best suit their preferences and behavior patterns.
+Focus on how their traits and patterns should influence content presentation, visual style, and engagement approach. 

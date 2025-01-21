@@ -10,6 +10,7 @@ from pathlib import Path
 from src.database.postgresql import PostgreSQLDatabase
 from src.ontology.manager import OntologyManager
 from src.agent.analyzer_agent import AnalyzerAgent
+from src.agent.curator_agent import CuratorAgent
 from src.utils.config import load_config, ConfigError
 from src.utils.exceptions import DatabaseError
 from src.schemas.definitions import get_database_schema, get_ontology_schema
@@ -169,6 +170,14 @@ def main():
             db_interface=db,
             ontology_manager=ontology
         )
+
+        # Initialize curator agent
+        curator = CuratorAgent(
+            config_path=config_path,
+            prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
+            db_interface=db,
+            ontology_manager=ontology
+        )
         
         # Test conversations for analysis
         test_conversations = [
@@ -226,12 +235,59 @@ def main():
             }
         ]
         
-        # Run analysis on test conversations
-        for conversation in test_conversations:
-            logger.info(f"Running analysis on conversation {conversation['id']}...")
-            result = analyzer.analyze_conversation(conversation)
-            logger.info(f"Analysis complete for {conversation['id']}:")
-            logger.info(json.dumps(result, indent=2))
+        # Comment out analysis for now
+        # for conversation in test_conversations:
+        #     logger.info(f"Running analysis on conversation {conversation['id']}...")
+        #     result = analyzer.analyze_conversation(conversation)
+        #     logger.info(f"Analysis complete for {conversation['id']}:")
+        #     logger.info(json.dumps(result, indent=2))
+
+        # Test blog customization request
+        test_request = {
+            "user_id": "user123",
+            "content_type": "technical_blog",
+            "customization_aspects": [
+                "content_style",
+                "visual_preferences",
+                "reading_level"
+            ],
+            "context": {
+                "article_topic": "Machine Learning Architecture Patterns",
+                "target_audience": "Software Engineers",
+                "estimated_read_time": "15 minutes"
+            }
+        }
+        
+        logger.info("Testing blog customization...")
+        customization_result = curator.execute(test_request)
+        
+        # Display examples
+        print("\n" + "="*80)
+        print("EXAMPLE CONVERSATIONS THAT CAN BE ANALYZED")
+        print("="*80)
+        
+        for i, conv in enumerate(test_conversations, 1):
+            print(f"\nCONVERSATION {i}:")
+            print("-"*40)
+            print(conv["content"])
+            print("\n" + "-"*40)
+
+        print("\n" + "="*80)
+        print("EXAMPLE BLOG CUSTOMIZATION REQUEST & RESPONSE")
+        print("="*80)
+        
+        print("\nREQUEST:")
+        print("-"*40)
+        print(json.dumps(test_request, indent=2))
+        
+        print("\nRESPONSE:")
+        print("-"*40)
+        # Parse the JSON from the markdown code block
+        response_text = customization_result.strip('`\n ')
+        if response_text.startswith('json'):
+            response_text = response_text[4:]  # Remove 'json' prefix
+        response_json = json.loads(response_text)
+        print(json.dumps(response_json, indent=2))
         
     except ConfigError as e:
         logger.error(f"Configuration error: {e}")
