@@ -16,6 +16,7 @@ from src.database.postgresql import PostgreSQLDatabase
 from src.ontology.manager import OntologyManager
 from src.agent.analyzer_agent import AnalyzerAgent
 from src.agent.curator_agent import CuratorAgent
+from src.agent.monitor_agent import MonitorAgent
 from src.utils.config import load_config, ConfigError
 from src.utils.exceptions import DatabaseError
 from src.schemas.definitions import get_database_schema, get_ontology_schema
@@ -205,6 +206,35 @@ def analyze_test_conversation(config_path: str, db: PostgreSQLDatabase):
         logger.error(f"Analysis failed: {e}")
         raise
 
+def run_monitoring(config_path: str, db: PostgreSQLDatabase):
+    """Start activity monitoring."""
+    logger.info("Starting activity monitoring...")
+    
+    ontology = OntologyManager(initial_schema=get_ontology_schema())
+    monitor = MonitorAgent(
+        config_path=config_path,
+        prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
+        db_interface=db,
+        ontology_manager=ontology
+    )
+    
+    try:
+        result = monitor.execute()
+        logger.info("Monitoring started successfully")
+        logger.info(json.dumps(result, indent=2))
+        
+        # Keep the main thread alive while monitoring runs in background
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("Stopping monitoring...")
+            monitor.stop_monitoring()
+            
+    except Exception as e:
+        logger.error(f"Monitoring failed: {e}")
+        raise
+
 def main():
     """Main entry point."""
     try:
@@ -213,6 +243,7 @@ def main():
         group = parser.add_mutually_exclusive_group()
         group.add_argument('-server', action='store_true', help='Run the API server')
         group.add_argument('-analyze', action='store_true', help='Analyze test conversation')
+        group.add_argument('-track', action='store_true', help='Start activity monitoring')
         args = parser.parse_args()
 
         # Ensure config exists
@@ -229,8 +260,10 @@ def main():
         elif args.server:
             logger.info("Starting API server...")
             run_server()
+        elif args.track:
+            run_monitoring(config_path, db)
         else:
-            logger.info("No mode specified. Use -server to run the API server or -analyze to analyze test conversation")
+            logger.info("No mode specified. Use -server to run the API server, -analyze to analyze test conversation, or -track to start monitoring")
             parser.print_help()
         
     except KeyboardInterrupt:

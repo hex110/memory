@@ -63,3 +63,36 @@ class ValidationError(Exception):
 class MigrationError(Exception):
     """Raised when a schema migration fails."""
     pass
+
+
+class ActivityTrackingError(Exception):
+    """Base exception for activity tracking related errors.
+    
+    This exception is raised when there are issues with activity tracking,
+    such as device access, permissions, or data collection failures.
+    """
+    pass
+
+
+class KeyboardTrackingError(ActivityTrackingError):
+    """Exception raised for keyboard tracking issues.
+    
+    This includes evdev device access failures and event tracking errors.
+    """
+    pass
+
+
+class ScreenCaptureError(ActivityTrackingError):
+    """Exception raised for screen capture issues.
+    
+    This includes screenshot failures, Wayland/X11 issues, and image processing errors.
+    """
+    pass
+
+
+class WindowTrackingError(ActivityTrackingError):
+    """Exception raised for window tracking issues.
+    
+    This includes window manager access failures and window state tracking errors.
+    """
+    pass

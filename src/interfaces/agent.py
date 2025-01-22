@@ -84,7 +84,7 @@ class MyAgent(BaseAgent):
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Union
 
 # Type aliases
 ToolSchema = Dict[str, Any]
@@ -227,7 +227,7 @@ class AgentInterface(ABC):
     @abstractmethod
     def call_llm(
         self,
-        prompt: str,
+        prompt: Union[str, List[Dict[str, Any]]],
         temperature: float = 0.7,
         system_prompt: Optional[str] = None,
         **kwargs
@@ -235,7 +235,8 @@ class AgentInterface(ABC):
         """Call the LLM with function calling support.
         
         Args:
-            prompt: The main prompt to send
+            prompt: The main prompt to send, either as a string or a list of content items
+                   for multimodal input (e.g., text + images)
             temperature: Sampling temperature (0.0-1.0)
             system_prompt: Optional system prompt
             **kwargs: Additional arguments for the LLM
@@ -249,10 +250,20 @@ class AgentInterface(ABC):
         in kwargs["response_format"].
         
         Example:
+            # Text-only prompt
             response = agent.call_llm(
                 prompt="Analyze this data...",
                 temperature=0.7,
                 system_prompt=system_prompt
+            )
+            
+            # Multimodal prompt
+            response = agent.call_llm(
+                prompt=[
+                    {"type": "text", "text": "What's in this image?"},
+                    {"type": "image_url", "image_url": {"url": "..."}}
+                ],
+                temperature=0.7
             )
         """
         pass

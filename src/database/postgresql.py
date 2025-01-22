@@ -88,17 +88,51 @@ class PostgreSQLDatabase(DatabaseInterface):
             if conn:
                 self.connection_pool.putconn(conn)
 
+    def _get_pg_type(self, schema_type: str) -> str:
+        """Convert schema type to PostgreSQL type."""
+        type_mapping = {
+            "string": "TEXT",
+            "integer": "INTEGER",
+            "number": "NUMERIC",
+            "boolean": "BOOLEAN",
+            "array": "TEXT[]",  # Simple array type
+            "object": "JSONB",  # Complex objects stored as JSONB
+        }
+        return type_mapping.get(schema_type, "TEXT")
+
     def create_collection(self, collection_name: str, schema: Optional[Dict[str, Any]] = None) -> None:
-        """Creates a new collection with JSONB storage."""
+        """Creates a new collection with columns based on schema."""
         try:
-            # Create table with JSONB data column for flexibility
-            query = f"""
-            CREATE TABLE IF NOT EXISTS {collection_name} (
-                id TEXT PRIMARY KEY,
-                data JSONB NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            )"""
+            if not schema or "properties" not in schema:
+                # Create default table structure if no schema provided
+                query = f"""
+                CREATE TABLE IF NOT EXISTS {collection_name} (
+                    id TEXT PRIMARY KEY,
+                    data JSONB NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                )"""
+            else:
+                # Build column definitions from schema
+                columns = ["id TEXT PRIMARY KEY"]
+                for field_name, field_def in schema["properties"].items():
+                    if field_name != "id":  # Skip id as it's already defined
+                        field_type = self._get_pg_type(field_def.get("type", "string"))
+                        default = f"DEFAULT {field_def.get('default')}" if "default" in field_def else ""
+                        columns.append(f"{field_name} {field_type} {default}")
+                
+                # Add timestamps
+                columns.extend([
+                    "created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP",
+                    "updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP"
+                ])
+                
+                # Create table with schema-defined columns
+                query = f"""
+                CREATE TABLE IF NOT EXISTS {collection_name} (
+                    {','.join(columns)}
+                )"""
+            
             self._execute_query(query)
             
             # Store schema if provided
@@ -120,26 +154,122 @@ class PostgreSQLDatabase(DatabaseInterface):
     def add_entity(self, collection_name: str, entity_id: str, data: Dict[str, Any]) -> str:
         """Add a new entity to a collection."""
         try:
-            query = f"""
-            INSERT INTO {collection_name} (id, data)
-            VALUES (%s, %s)
-            RETURNING id
-            """
-            result = self._execute_query(query, (entity_id, json.dumps(data)))
+            schema = self.schemas.get(collection_name)
+            
+            if not schema or "properties" not in schema:
+                # Use old JSONB approach if no schema
+                query = f"""
+                INSERT INTO {collection_name} (id, data)
+                VALUES (%s, %s)
+                RETURNING id
+                """
+                result = self._execute_query(query, (entity_id, json.dumps(data)))
+            else:
+                # Build column list and values for schema-based table
+                columns = ["id"]
+                values = [entity_id]
+                placeholders = ["%s"]
+                
+                for field_name in schema["properties"]:
+                    if field_name != "id" and field_name in data:
+                        columns.append(field_name)
+                        field_def = schema["properties"][field_name]
+                        
+                        # Handle different field types
+                        if field_def.get("type") == "array":
+                            # Convert Python list to PostgreSQL array format
+                            array_value = data[field_name]
+                            if not isinstance(array_value, list):
+                                array_value = []  # Ensure it's a list
+                            # Convert to PostgreSQL array literal format
+                            values.append(array_value)
+                        elif field_def.get("type") == "object":
+                            # Store objects as JSONB
+                            values.append(json.dumps(data[field_name]))
+                        else:
+                            # Handle scalar values
+                            values.append(data[field_name])
+                        
+                        placeholders.append("%s")
+                
+                query = f"""
+                INSERT INTO {collection_name} ({', '.join(columns)})
+                VALUES ({', '.join(placeholders)})
+                RETURNING id
+                """
+                result = self._execute_query(query, tuple(values))
+            
             return str(result[0]["id"])
+            
         except Exception as e:
             raise DatabaseError(f"Failed to add entity: {e}")
 
     def get_entity(self, collection_name: str, entity_id: str) -> Dict[str, Any]:
         """Get an entity by ID."""
-        query = f"SELECT data FROM {collection_name} WHERE id = %s"
-        result = self._execute_query(query, (entity_id,))
-        return result[0]["data"] if result else {}
+        schema = self.schemas.get(collection_name)
+        
+        if not schema or "properties" not in schema:
+            # Use old JSONB approach if no schema
+            query = f"SELECT data FROM {collection_name} WHERE id = %s"
+            result = self._execute_query(query, (entity_id,))
+            return result[0]["data"] if result else {}
+        else:
+            # Get all columns for schema-based table
+            query = f"SELECT * FROM {collection_name} WHERE id = %s"
+            result = self._execute_query(query, (entity_id,))
+            
+            if not result:
+                return {}
+                
+            # Convert row to dict, handling arrays and objects
+            row = result[0]
+            data = {}
+            
+            for field_name, field_def in schema["properties"].items():
+                if field_name in row:
+                    value = row[field_name]
+                    if field_def.get("type") == "array":
+                        # PostgreSQL arrays come back as lists already
+                        data[field_name] = value if value is not None else []
+                    elif field_def.get("type") == "object" and value:
+                        try:
+                            data[field_name] = json.loads(value)
+                        except (json.JSONDecodeError, TypeError):
+                            data[field_name] = value
+                    else:
+                        data[field_name] = value
+                    
+            return data
 
     def get_entities(self, collection_name: str) -> List[Dict[str, Any]]:
         """Get all entities in a collection."""
-        query = f"SELECT data FROM {collection_name}"
-        return [row["data"] for row in self._execute_query(query)]
+        schema = self.schemas.get(collection_name)
+        
+        if not schema or "properties" not in schema:
+            # Use old JSONB approach if no schema
+            query = f"SELECT data FROM {collection_name}"
+            return [row["data"] for row in self._execute_query(query)]
+        else:
+            # Get all columns for schema-based table
+            query = f"SELECT * FROM {collection_name}"
+            results = self._execute_query(query)
+            
+            # Convert rows to dicts, parsing JSON for array/object fields
+            entities = []
+            for row in results:
+                data = {}
+                for field_name, field_def in schema["properties"].items():
+                    if field_name in row:
+                        value = row[field_name]
+                        if field_def.get("type") in ("array", "object") and value:
+                            try:
+                                value = json.loads(value)
+                            except (json.JSONDecodeError, TypeError):
+                                pass  # Keep original value if not valid JSON
+                        data[field_name] = value
+                entities.append(data)
+                
+            return entities
 
     def find(self, collection_name: str, query: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Find entities matching query criteria."""
@@ -228,23 +358,65 @@ class PostgreSQLDatabase(DatabaseInterface):
                upsert: bool = False) -> None:
         """Update entity data with optional upsert."""
         try:
-            if upsert:
-                query = f"""
-                INSERT INTO {collection_name} (id, data)
-                VALUES (%s, %s)
-                ON CONFLICT (id) DO UPDATE
-                SET data = {collection_name}.data || %s::jsonb,
-                    updated_at = CURRENT_TIMESTAMP
-                """
-                self._execute_query(query, (entity_id, json.dumps(data), json.dumps(data)))
+            schema = self.schemas.get(collection_name)
+            
+            if not schema or "properties" not in schema:
+                # Use old JSONB approach if no schema
+                if upsert:
+                    query = f"""
+                    INSERT INTO {collection_name} (id, data)
+                    VALUES (%s, %s)
+                    ON CONFLICT (id) DO UPDATE
+                    SET data = {collection_name}.data || %s::jsonb,
+                        updated_at = CURRENT_TIMESTAMP
+                    """
+                    self._execute_query(query, (entity_id, json.dumps(data), json.dumps(data)))
+                else:
+                    query = f"""
+                    UPDATE {collection_name}
+                    SET data = data || %s::jsonb,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                    """
+                    self._execute_query(query, (json.dumps(data), entity_id))
             else:
-                query = f"""
-                UPDATE {collection_name}
-                SET data = data || %s::jsonb,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = %s
-                """
-                self._execute_query(query, (json.dumps(data), entity_id))
+                # Build SET clause for schema-based table
+                set_items = []
+                values = []
+                
+                for field_name, value in data.items():
+                    if field_name in schema["properties"] and field_name != "id":
+                        set_items.append(f"{field_name} = %s")
+                        values.append(
+                            json.dumps(value) if isinstance(value, (dict, list))
+                            else value
+                        )
+                
+                if set_items:
+                    set_items.append("updated_at = CURRENT_TIMESTAMP")
+                    values.append(entity_id)  # For WHERE clause
+                    
+                    if upsert:
+                        # Build INSERT with ON CONFLICT
+                        columns = ["id"] + list(data.keys())
+                        placeholders = ["%s"] * len(columns)
+                        insert_values = [entity_id] + values[:-1]  # Remove the WHERE id value
+                        
+                        query = f"""
+                        INSERT INTO {collection_name} ({', '.join(columns)})
+                        VALUES ({', '.join(placeholders)})
+                        ON CONFLICT (id) DO UPDATE
+                        SET {', '.join(set_items)}
+                        """
+                        self._execute_query(query, tuple(insert_values + values))
+                    else:
+                        query = f"""
+                        UPDATE {collection_name}
+                        SET {', '.join(set_items)}
+                        WHERE id = %s
+                        """
+                        self._execute_query(query, tuple(values))
+                        
         except Exception as e:
             raise DatabaseError(f"Update failed: {e}")
 
@@ -290,3 +462,79 @@ class PostgreSQLDatabase(DatabaseInterface):
             
         except Exception as e:
             raise DatabaseError(f"Database initialization failed: {e}")
+
+    def query_entities(
+        self,
+        collection_name: str,
+        query: Dict[str, Any],
+        sort_by: Optional[str] = None,
+        sort_order: str = "desc",
+        limit: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Query entities with filters and optional sorting.
+        
+        Args:
+            collection_name: Name of collection to query
+            query: Dict of field-value pairs to filter by
+            sort_by: Field to sort results by
+            sort_order: Sort direction ("asc" or "desc")
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of matching entities
+        """
+        try:
+            # Build WHERE clause from query
+            where_clauses = []
+            values = []
+            for field, value in query.items():
+                where_clauses.append(f"{field} = %s")
+                values.append(value)
+            
+            where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
+            
+            # Add sorting if specified
+            order_sql = ""
+            if sort_by:
+                direction = "DESC" if sort_order.lower() == "desc" else "ASC"
+                order_sql = f" ORDER BY {sort_by} {direction}"
+            
+            # Add limit if specified
+            limit_sql = f" LIMIT {limit}" if limit else ""
+            
+            # Build and execute query
+            sql = f"""
+                SELECT * FROM {collection_name}
+                WHERE {where_sql}{order_sql}{limit_sql}
+            """
+            
+            result = self._execute_query(sql, tuple(values))
+            
+            # Convert rows to dicts with proper types
+            schema = self.schemas.get(collection_name, {})
+            entities = []
+            
+            for row in result:
+                entity = {}
+                for field_name, value in row.items():
+                    if schema and "properties" in schema:
+                        field_def = schema["properties"].get(field_name, {})
+                        if field_def.get("type") == "array" and value is not None:
+                            # Handle array fields
+                            entity[field_name] = value
+                        elif field_def.get("type") == "object" and value:
+                            # Handle JSON fields
+                            try:
+                                entity[field_name] = json.loads(value)
+                            except (json.JSONDecodeError, TypeError):
+                                entity[field_name] = value
+                        else:
+                            entity[field_name] = value
+                    else:
+                        entity[field_name] = value
+                entities.append(entity)
+            
+            return entities
+            
+        except Exception as e:
+            raise DatabaseError(f"Failed to query entities: {e}")

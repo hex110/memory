@@ -59,16 +59,14 @@ def get_database_schema() -> Dict[str, Any]:
         "activity_log": {
             "description": "Logs of user activities including screenshots, key/mouse clicks, and open windows",
             "properties": {
-                "id": {
-                    "type": "string",
-                    "maxLength": 30,
-                    "pattern": "^[a-z0-9_]+$",
-                    "description": "Unique identifier for the activity log"
-                },
                 "timestamp": {
                     "type": "string",
                     "format": "date-time",
-                    "description": "Timestamp of the activity log"
+                    "description": "Timestamp of the activity log (serves as primary key)"
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "UUID of the monitoring session this log belongs to"
                 },
                 "screenshot": {
                     "type": "string",
@@ -77,11 +75,6 @@ def get_database_schema() -> Dict[str, Any]:
                 "key_clicks": {
                     "type": "array",
                     "description": "List of keys pressed",
-                    "items": {"type": "string"}
-                },
-                "mouse_clicks": {
-                    "type": "array",
-                    "description": "List of mouse click events",
                     "items": {"type": "string"}
                 },
                 "open_windows": {
@@ -103,8 +96,13 @@ def get_database_schema() -> Dict[str, Any]:
                     "type": "integer",
                     "description": "Total number of scroll events",
                     "default": 0
+                },
+                "llm_response": {
+                    "type": "string",
+                    "description": "LLM's analysis of the activity based on screenshot and log data"
                 }
-            }
+            },
+            "required": ["timestamp", "session_id"]
         }
     }
 

@@ -9,3 +9,6 @@ json-repair
 pydantic
 fastapi
 uvicorn
+evdev
+pyscreenshot
+pillow

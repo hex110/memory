@@ -74,12 +74,16 @@ class AgentDatabaseTools:
     # Role definitions with allowed methods
     ROLE_PERMISSIONS = {
         "analyzer": {
-            "read_methods": ["get_entity", "get_entities", "get_schema"],
+            "read_methods": ["get_entity", "get_entities", "get_schema", "query_entities"],
             "write_methods": ["add_entity", "update_entity", "remove_entity"]
         },
         "curator": {
-            "read_methods": ["get_entity", "get_entities", "get_schema"],
+            "read_methods": ["get_entity", "get_entities", "get_schema", "query_entities"],
             "write_methods": []  # Read-only role
+        },
+        "monitor": {
+            "read_methods": ["get_entities", "query_entities", "get_entity"],
+            "write_methods": ["add_entity", "update_entity"]  # Allow both add and update for activity logs
         }
     }
     
@@ -277,6 +281,55 @@ class AgentDatabaseTools:
                 },
                 "required": ["entity_type", "entity_id"]
             }
+        },
+        "query_entities": {
+            "name": "query_entities",
+            "description": "Query entities with filters and sorting",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_type": {
+                        "type": "string",
+                        "description": "Type of entities to query (activity_log, conversation, or personality_trait)"
+                    },
+                    "query": {
+                        "type": "object",
+                        "description": "Query filters for the entity fields",
+                        "properties": {
+                            "id": {
+                                "type": "string",
+                                "description": "Filter by entity ID"
+                            },
+                            "session_id": {
+                                "type": "string",
+                                "description": "Filter by session ID (for activity_log)"
+                            },
+                            "timestamp": {
+                                "type": "string",
+                                "description": "Filter by timestamp (ISO format, e.g. 2024-01-22T05:18:45)"
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "Filter by content text"
+                            }
+                        }
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "description": "Field to sort by (e.g. timestamp, id)"
+                    },
+                    "sort_order": {
+                        "type": "string",
+                        "enum": ["asc", "desc"],
+                        "description": "Sort order"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return"
+                    }
+                },
+                "required": ["entity_type", "query"]
+            }
         }
     }
     
@@ -427,4 +480,35 @@ class AgentDatabaseTools:
         """
         self._check_permission("remove_entity", "write")
         entity_id = self._normalize_entity_id(entity_id)
-        self.db.delete(entity_type, entity_id) 
+        self.db.delete(entity_type, entity_id)
+
+    @track_operation("read", "query_entities")
+    @tool_schema(TOOL_SCHEMAS["query_entities"])
+    def query_entities(
+        self,
+        entity_type: str,
+        query: Dict[str, Any],
+        sort_by: Optional[str] = None,
+        sort_order: str = "desc",
+        limit: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Query entities with filters and sorting.
+        
+        Args:
+            entity_type: Type of entities to query
+            query: Query filters
+            sort_by: Field to sort by
+            sort_order: Sort order (asc/desc)
+            limit: Maximum number of results
+            
+        Returns:
+            List of matching entities
+        """
+        self._check_permission("query_entities", "read")
+        return self.db.query_entities(
+            entity_type,
+            query,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=limit
+        ) 

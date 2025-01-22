@@ -52,3 +52,6 @@ backups/
 # OS
 .DS_Store
 Thumbs.db
+
+# Screenshots
+screenshots/

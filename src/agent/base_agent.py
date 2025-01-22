@@ -3,8 +3,9 @@
 import os
 import json
 import time
+import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Callable
+from typing import Dict, Any, Optional, List, Callable, Union
 from jinja2 import Environment, FileSystemLoader
 
 import litellm
@@ -45,6 +46,9 @@ class BaseAgent(AgentInterface):
         Raises:
             ConfigError: If required config values are missing
         """
+        # Set up logging
+        self.logger = logging.getLogger(f"src.agent.{role}_agent")
+        
         # Enable JSON schema validation for Gemini
         litellm.enable_json_schema_validation = True
         
@@ -63,6 +67,10 @@ class BaseAgent(AgentInterface):
             os.environ["GEMINI_API_KEY"] = provider_config["api_key"]
             # Add gemini/ prefix for LiteLLM
             self.model = "gemini/gemini-2.0-flash-exp"
+            
+            # Verify vision support
+            if not litellm.supports_vision(self.model):
+                raise ConfigError(f"Model {self.model} does not support vision")
         else:
             # For OpenRouter
             os.environ["OPENROUTER_API_KEY"] = provider_config["api_key"]
@@ -113,7 +121,7 @@ class BaseAgent(AgentInterface):
     
     def call_llm(
         self,
-        prompt: str,
+        prompt: Union[str, List[Dict[str, Any]]],
         temperature: float = 0.7,
         system_prompt: Optional[str] = None,
         **kwargs
@@ -123,7 +131,13 @@ class BaseAgent(AgentInterface):
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": prompt})
+            
+            # Handle both string prompts and structured content
+            if isinstance(prompt, str):
+                messages.append({"role": "user", "content": prompt})
+            else:
+                # If prompt is a list, it's structured content
+                messages.append({"role": "user", "content": prompt})
             
             # Configure function calling
             if self.tool_schemas:
