@@ -57,7 +57,7 @@ def get_database_schema() -> Dict[str, Any]:
             }
         },
         "activity_log": {
-            "description": "Logs of user activities including screenshots, key/mouse clicks, and open windows",
+            "description": "Logs of user activities including window sessions, screenshots, and input events",
             "properties": {
                 "timestamp": {
                     "type": "string",
@@ -72,29 +72,23 @@ def get_database_schema() -> Dict[str, Any]:
                     "type": "string",
                     "description": "Base64 encoded screenshot image"
                 },
-                "key_clicks": {
-                    "type": "array",
-                    "description": "List of keys pressed",
-                    "items": {"type": "string"}
+                "window_sessions": {
+                    "type": "string",
+                    "description": "JSON string containing list of window activity sessions in this time period"
                 },
-                "open_windows": {
-                    "type": "array",
-                    "description": "List of currently open windows",
-                    "items": {"type": "string"}
-                },
-                "keys_pressed_count": {
+                "total_keys_pressed": {
                     "type": "integer",
-                    "description": "Total number of keys pressed",
+                    "description": "Total number of keys pressed across all windows",
                     "default": 0
                 },
-                "clicks_count": {
+                "total_clicks": {
                     "type": "integer",
-                    "description": "Total number of mouse clicks",
+                    "description": "Total number of mouse clicks across all windows",
                     "default": 0
                 },
-                "scrolls_count": {
+                "total_scrolls": {
                     "type": "integer",
-                    "description": "Total number of scroll events",
+                    "description": "Total number of scroll events across all windows",
                     "default": 0
                 },
                 "llm_response": {

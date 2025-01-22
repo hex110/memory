@@ -1,10 +1,11 @@
-"""Window tracking functionality for Hyprland.
+"""Window tracking functionality.
 
-This module provides window tracking capabilities for the Hyprland
-window manager. It captures window state and metadata using hyprctl.
+This module provides window tracking capabilities for different window managers.
+The base WindowManagerInterface allows for easy addition of new window managers,
+while the HyprlandManager provides specific implementation for Hyprland.
 
 Core features:
-- Window state capture using hyprctl
+- Abstract interface for window managers
 - Focus history tracking
 - Window metadata parsing
 - Window classification
@@ -23,27 +24,50 @@ Example:
 
 import subprocess
 import logging
+import os
+import socket
+import threading
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Callable
+from abc import ABC, abstractmethod
 
 from src.utils.exceptions import WindowTrackingError
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
-class WindowTracker:
-    """Tracks active windows and their metadata using hyprctl.
+class WindowManagerInterface(ABC):
+    """Abstract interface for window manager implementations.
     
-    This class manages window state tracking for Hyprland:
-    - Captures window metadata using hyprctl
-    - Tracks window focus history
-    - Maintains window ordering
-    - Classifies windows based on application type
-    
-    The tracker uses the hyprctl command-line tool to gather
-    window information and maintains the window order based
-    on focus history.
+    This interface defines the required methods that any window manager
+    implementation must provide for window tracking functionality.
     """
+    
+    @abstractmethod
+    def get_active_window(self) -> Optional[Dict[str, str]]:
+        """Get currently focused window info.
+        
+        Returns:
+            Dict with window info (class, title) or None if no active window
+        """
+        pass
+    
+    @abstractmethod
+    def setup_focus_tracking(self, callback: Callable[[Dict[str, str]], None]) -> None:
+        """Set up focus change tracking.
+        
+        Args:
+            callback: Function to call when window focus changes
+        """
+        pass
+    
+    @abstractmethod
+    def cleanup(self) -> None:
+        """Clean up any resources used by the window manager."""
+        pass
+
+class HyprlandManager(WindowManagerInterface):
+    """Hyprland-specific window manager implementation."""
     
     # Window classification mappings
     WINDOW_CLASS_MAPPINGS = {
@@ -76,19 +100,15 @@ class WindowTracker:
     }
     
     def __init__(self) -> None:
-        """Initialize window tracker."""
+        """Initialize Hyprland window manager interface."""
         self.windows: List[Dict[str, Any]] = []
-        logger.debug("WindowTracker initialized")
+        self.socket_thread: Optional[threading.Thread] = None
+        self.running = False
+        self._focus_callback: Optional[Callable[[Dict[str, str]], None]] = None
+        logger.debug("HyprlandManager initialized")
     
     def _get_window_class_name(self, window_class: str) -> str:
-        """Get the classified window name based on the window class.
-        
-        Args:
-            window_class: The original window class from hyprctl
-            
-        Returns:
-            The classified window name or the original class if no match
-        """
+        """Get the classified window name based on the window class."""
         if not window_class:
             return "Unknown"
             
@@ -103,122 +123,107 @@ class WindowTracker:
         logger.debug(f"No classification found for {window_class}")
         return window_class.title()
     
-    def _parse_hyprctl_output(self, output: str) -> None:
-        """Parse the output of hyprctl clients command.
-        
-        Args:
-            output: Raw output string from hyprctl clients
-        """
+    def setup_focus_tracking(self, callback: Callable[[Dict[str, str]], None]) -> None:
+        """Set up focus change tracking using Hyprland's IPC socket."""
+        self._focus_callback = callback
         try:
-            windows = []
-            current_window = {}
+            # Get Hyprland instance signature
+            his = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+            if not his:
+                logger.error("HYPRLAND_INSTANCE_SIGNATURE not found in environment")
+                return
+
+            # Construct socket path
+            runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "/run/user/1000")
+            self.socket_path = f"{runtime_dir}/hypr/{his}/.socket2.sock"
             
-            for line in output.split("\n"):
-                line = line.strip()
-                
-                if line.startswith("Window ") and " -> " in line:
-                    if current_window:  # Save previous window if exists
-                        # Get the classified window name
-                        window_class = current_window.get("class", "")
-                        class_name = self._get_window_class_name(window_class)
-                        
-                        windows.append({
-                            "title": current_window.get("title", ""),
-                            "class": class_name,
-                            "original_class": window_class,  # Keep original for debugging
-                            "focusHistoryID": int(current_window.get("focusHistoryID", 999))
-                        })
-                        logger.debug(f"Parsed window: {class_name} - {current_window.get('title', '')}")
-                    
-                    current_window = {}
-                    current_window["title"] = line.split(" -> ")[1].strip(":")
-                    
-                elif ": " in line:
-                    key, value = line.split(": ", 1)
-                    key = key.strip()
-                    value = value.strip()
-                    current_window[key] = value
-            
-            # Don't forget the last window
-            if current_window:
-                window_class = current_window.get("class", "")
-                class_name = self._get_window_class_name(window_class)
-                
-                windows.append({
-                    "title": current_window.get("title", ""),
-                    "class": class_name,
-                    "original_class": window_class,  # Keep original for debugging
-                    "focusHistoryID": int(current_window.get("focusHistoryID", 999))
-                })
-                logger.debug(f"Parsed window: {class_name} - {current_window.get('title', '')}")
-            
-            # Sort windows by focusHistoryID
-            self.windows = sorted(windows, key=lambda x: x["focusHistoryID"])
-            
-            # Remove focusHistoryID and original_class from final output
-            for window in self.windows:
-                del window["focusHistoryID"]
-                del window["original_class"]
-            
-            logger.debug(f"Parsed {len(self.windows)} windows")
+            # Start socket listening thread
+            self.running = True
+            self.socket_thread = threading.Thread(target=self._listen_for_events)
+            self.socket_thread.daemon = True
+            self.socket_thread.start()
+            logger.debug("IPC socket listener started")
             
         except Exception as e:
-            logger.error(f"Failed to parse window data: {e}")
-            raise WindowTrackingError(f"Failed to parse window data: {e}")
+            logger.error(f"Failed to setup IPC socket: {e}")
     
-    def get_window_state(self) -> Optional[Dict[str, Any]]:
-        """Get current window state.
-        
-        Returns:
-            Dict containing window state data and metadata, or None if capture fails
-            Format: {
-                "timestamp": ISO format timestamp,
-                "windows": List of window data with class and title,
-                "active_window": Currently focused window (if any)
-            }
-        """
+    def _listen_for_events(self) -> None:
+        """Listen for events from Hyprland's IPC socket."""
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.connect(self.socket_path)
+            
+            while self.running:
+                data = sock.recv(1024).decode()
+                if not data:
+                    continue
+                    
+                for line in data.strip().split('\n'):
+                    if line.startswith('activewindow>>'):
+                        # Format: activewindow>>WINDOWCLASS,WINDOWTITLE
+                        _, window_info = line.split('>>', 1)
+                        window_class, window_title = window_info.split(',', 1)
+                        class_name = self._get_window_class_name(window_class)
+                        
+                        if self._focus_callback:
+                            self._focus_callback({
+                                "class": class_name,
+                                "title": window_title,
+                                "original_class": window_class
+                            })
+                        
+        except Exception as e:
+            logger.error(f"IPC socket error: {e}")
+            self.running = False
+        finally:
+            sock.close()
+    
+    def get_active_window(self) -> Optional[Dict[str, str]]:
+        """Get currently focused window info."""
         try:
             # Capture current window state
             result = subprocess.run(
-                ["hyprctl", "clients"],
+                ["hyprctl", "activewindow"],
                 capture_output=True,
                 text=True,
                 check=True
             )
             
             # Parse the output
-            self._parse_hyprctl_output(result.stdout)
+            window_class = ""
+            window_title = ""
             
-            # Create result with metadata
-            window_state = {
-                "timestamp": datetime.now().isoformat(),
-                "windows": self.windows,
-                "active_window": self.windows[0] if self.windows else None
-            }
+            for line in result.stdout.split("\n"):
+                line = line.strip()
+                if ": " in line:
+                    key, value = line.split(": ", 1)
+                    key = key.strip()
+                    value = value.strip()
+                    if key == "class":
+                        window_class = value
+                    elif key == "title":
+                        window_title = value
             
-            logger.debug(f"Captured window state: {len(self.windows)} windows")
-            return window_state
+            if window_class:
+                class_name = self._get_window_class_name(window_class)
+                return {
+                    "class": class_name,
+                    "title": window_title,
+                    "original_class": window_class
+                }
             
-        except subprocess.CalledProcessError as e:
-            logger.error("Failed to execute hyprctl clients")
+            return None
+            
+        except subprocess.CalledProcessError:
+            logger.error("Failed to execute hyprctl activewindow")
             return None
         except Exception as e:
-            logger.error(f"Failed to capture window state: {e}")
+            logger.error(f"Failed to get active window: {e}")
             return None
     
-    def get_active_window(self) -> Optional[Dict[str, Any]]:
-        """Get currently focused window.
-        
-        Returns:
-            Dict containing active window data, or None if no active window
-        """
-        state = self.get_window_state()
-        return state["active_window"] if state else None
-    
     def cleanup(self) -> None:
-        """Cleanup any resources.
-        
-        Currently a no-op as window tracking doesn't need cleanup,
-        but included for consistency with other trackers.
-        """
-        pass
+        """Clean up IPC socket connection."""
+        self.running = False
+        if self.socket_thread:
+            self.socket_thread.join(timeout=1.0)
+        logger.debug("HyprlandManager cleaned up")

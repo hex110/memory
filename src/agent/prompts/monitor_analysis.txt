@@ -1,0 +1,52 @@
+Analyze this activity snapshot and provide a detailed scientific observation of the user's behavior and work patterns.
+
+OBSERVATION PERIOD:
+Timestamp: {{timestamp}}
+Duration: {{duration}} seconds
+
+ACTIVITY SUMMARY:
+{{window_summaries}}
+
+INTERACTION METRICS:
+- Keyboard Events: {{total_keys}}
+- Mouse Clicks: {{total_clicks}}
+- Scroll Events: {{total_scrolls}}
+
+{% if screenshot_available %}
+A screenshot of the activity state is attached for visual analysis.
+{% endif %}
+
+Please provide a comprehensive analysis that includes:
+
+1. Primary Activity Focus:
+   - Main applications/windows in use
+   - Nature of the interaction (reading, writing, coding, etc.)
+   - Intensity and engagement level
+
+2. Behavioral Patterns:
+   - Task switching frequency and context
+   - Multitasking indicators
+   - Focus duration and attention patterns
+
+3. Work/Activity Classification:
+   - Type of work being performed
+   - Tools and resources being utilized
+   - Apparent goals or objectives
+
+4. Notable Observations:
+   - Unusual patterns or behaviors
+   - Productivity indicators
+   - Environmental or contextual factors
+
+5. Comparative Analysis:
+   {% if has_previous_logs %}
+   - Changes from previous observations
+   - Emerging patterns or trends
+   - Potential workflow optimizations
+   {% else %}
+   - Initial baseline observation
+   - Preliminary pattern identification
+   - Suggested areas for future analysis
+   {% endif %}
+
+Format your response as a scientific observation, maintaining objectivity while providing detailed insights that could be valuable for long-term behavioral analysis. 

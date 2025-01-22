@@ -7,7 +7,7 @@ a flexible way to filter and process them.
 Core features:
 - Device discovery and monitoring
 - Event capture and categorization
-- Configurable event filtering
+- Window-based event tracking
 - Thread-safe event collection
 
 Example:
@@ -36,6 +36,8 @@ import evdev
 from evdev import InputDevice, categorize, ecodes
 
 from src.utils.exceptions import KeyboardTrackingError
+from src.utils.activity.windows import WindowManagerInterface
+from src.utils.activity.session import WindowSession
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -47,21 +49,24 @@ class ActivityTracker:
     - Event filtering through callbacks
     - Thread-safe event collection
     - Automatic device discovery
+    - Window-based activity tracking
     - Error recovery
-    
-    The tracker runs in a background thread and can be configured
-    to filter events based on external conditions (e.g., active window).
     """
     
-    def __init__(self) -> None:
-        """Initialize the activity tracker."""
+    def __init__(self, window_manager: WindowManagerInterface) -> None:
+        """Initialize the activity tracker.
+        
+        Args:
+            window_manager: Window manager implementation to use
+        """
         # Event storage
-        self.keyboard_events: List[Dict[str, Any]] = []
-        self.mouse_events: List[Dict[str, Any]] = []
+        self.current_session: Optional[WindowSession] = None
+        self.pending_sessions: List[WindowSession] = []
         
         # Tracking state
         self.devices: List[InputDevice] = []
         self.is_running = False
+        self.window_manager = window_manager
         
         # Event filtering
         self._should_track_callback: Optional[Callable[[], bool]] = None
@@ -71,19 +76,15 @@ class ActivityTracker:
         self._thread: Optional[threading.Thread] = None
         self._tasks: List[asyncio.Task] = []
         
-        # Event counters
-        self._key_count = 0
-        self._click_count = 0
-        self._scroll_count = 0
+        # Event totals
+        self._total_keys = 0
+        self._total_clicks = 0
+        self._total_scrolls = 0
         
         logger.debug("ActivityTracker initialized")
     
     def set_tracking_filter(self, callback: Callable[[], bool]) -> None:
-        """Set a callback to determine if events should be tracked.
-        
-        Args:
-            callback: Function that returns True if events should be tracked
-        """
+        """Set a callback to determine if events should be tracked."""
         self._should_track_callback = callback
         logger.debug("Tracking filter set")
     
@@ -100,6 +101,23 @@ class ActivityTracker:
             279: "Button.task",
         }
         return button_map.get(code, f"Button.{code}")
+    
+    def _on_window_focus_change(self, window_info: Dict[str, str]) -> None:
+        """Handle window focus changes.
+        
+        Args:
+            window_info: Information about the newly focused window
+        """
+        now = datetime.now()
+        
+        # End current session if exists
+        if self.current_session:
+            self.current_session.end_session(now)
+            self.pending_sessions.append(self.current_session)
+        
+        # Start new session
+        self.current_session = WindowSession(window_info, now)
+        logger.debug(f"Started new session for {window_info['class']}")
     
     def find_input_devices(self) -> None:
         """Find all keyboard and mouse input devices."""
@@ -136,6 +154,10 @@ class ActivityTracker:
                 # Check if we should track this event
                 if self._should_track_callback and not self._should_track_callback():
                     continue
+                
+                # Skip if no active window session
+                if not self.current_session:
+                    continue
 
                 if event.type == evdev.ecodes.EV_KEY:
                     timestamp = datetime.now().isoformat()
@@ -143,27 +165,32 @@ class ActivityTracker:
                     # Handle mouse buttons (BTN_LEFT to BTN_TASK)
                     if event.code in range(272, 280):
                         if event.value == 1:  # Press only
-                            self._click_count += 1
+                            self._total_clicks += 1
+                            self.current_session.add_event("click", {
+                                "button": self._get_button_name(event.code),
+                                "timestamp": timestamp
+                            })
                     
-                    # Handle keyboard keys - filter out non-keyboard events
+                    # Handle keyboard keys
                     elif event.code in evdev.ecodes.keys:
                         key_name = evdev.ecodes.keys[event.code]
-                        # Only track actual keyboard keys (skip BTN_ and other special events)
+                        # Only track actual keyboard keys
                         if key_name.startswith("KEY_"):
                             event_type = ("press" if event.value == 1 else 
                                         "release" if event.value == 0 else "hold")
                             
                             if event_type == "press":
-                                self._key_count += 1
+                                self._total_keys += 1
                                 # Convert key names to more readable format
                                 key = key_name[4:]  # Remove KEY_ prefix
-                                if len(key) == 1:  # Single character keys
-                                    key = key.lower()  # Make it lowercase for consistency
-                                elif key in ["LEFTSHIFT", "RIGHTSHIFT", "LEFTCTRL", "RIGHTCTRL", 
-                                          "LEFTALT", "RIGHTALT", "LEFTMETA", "RIGHTMETA"]:
+                                if len(key) == 1:
+                                    key = key.lower()
+                                elif key in ["LEFTSHIFT", "RIGHTSHIFT", "LEFTCTRL", 
+                                          "RIGHTCTRL", "LEFTALT", "RIGHTALT", 
+                                          "LEFTMETA", "RIGHTMETA"]:
                                     continue  # Skip modifier keys
                                 
-                                self.keyboard_events.append({
+                                self.current_session.add_event("key", {
                                     "type": event_type,
                                     "key": key,
                                     "timestamp": timestamp
@@ -172,7 +199,13 @@ class ActivityTracker:
                 elif event.type == evdev.ecodes.EV_REL:
                     # Track both vertical and horizontal scroll
                     if event.code in [evdev.ecodes.REL_WHEEL, evdev.ecodes.REL_HWHEEL]:
-                        self._scroll_count += abs(event.value)
+                        self._total_scrolls += abs(event.value)
+                        if self.current_session:
+                            self.current_session.add_event("scroll", {
+                                "direction": "vertical" if event.code == evdev.ecodes.REL_WHEEL else "horizontal",
+                                "amount": event.value,
+                                "timestamp": datetime.now().isoformat()
+                            })
                             
         except Exception as e:
             logger.warning(f"Device monitoring error: {e}")
@@ -213,6 +246,14 @@ class ActivityTracker:
             if not self.devices:
                 raise KeyboardTrackingError("No input devices found")
             
+            # Set up window focus tracking
+            self.window_manager.setup_focus_tracking(self._on_window_focus_change)
+            
+            # Start with current window if any
+            current_window = self.window_manager.get_active_window()
+            if current_window:
+                self._on_window_focus_change(current_window)
+            
             self.is_running = True
             self._thread = threading.Thread(target=self._run_event_loop)
             self._thread.daemon = True
@@ -227,6 +268,12 @@ class ActivityTracker:
         try:
             logger.info("Stopping activity tracking...")
             self.is_running = False
+            
+            # End current session if exists
+            if self.current_session:
+                self.current_session.end_session(datetime.now())
+                self.pending_sessions.append(self.current_session)
+                self.current_session = None
             
             # Cancel all tasks
             if self._event_loop and self._tasks:
@@ -253,23 +300,37 @@ class ActivityTracker:
         """Get collected events and reset counters.
         
         Returns:
-            Dict containing keyboard events and event counts
+            Dict containing window sessions and event totals
         """
+        # End current session temporarily to get its data
+        current_session_data = None
+        if self.current_session:
+            temp_session = WindowSession(
+                self.current_session.window_info,
+                self.current_session.start_time
+            )
+            temp_session.end_session(datetime.now())
+            current_session_data = temp_session.to_dict()
+        
+        # Collect all session data
+        sessions = [s.to_dict() for s in self.pending_sessions]
+        if current_session_data:
+            sessions.append(current_session_data)
+        
         events = {
-            "keyboard_events": self.keyboard_events.copy(),
+            "window_sessions": sessions,
             "counts": {
-                "keys_pressed": self._key_count,
-                "clicks": self._click_count,
-                "scrolls": self._scroll_count
+                "total_keys_pressed": self._total_keys,
+                "total_clicks": self._total_clicks,
+                "total_scrolls": self._total_scrolls
             },
             "timestamp": datetime.now().isoformat()
         }
         
-        # Reset storage and counters
-        self.keyboard_events = []
-        self.mouse_events = []  # Keep this for internal tracking
-        self._key_count = 0
-        self._click_count = 0
-        self._scroll_count = 0
+        # Clear pending sessions and reset counters
+        self.pending_sessions = []
+        self._total_keys = 0
+        self._total_clicks = 0
+        self._total_scrolls = 0
         
         return events
