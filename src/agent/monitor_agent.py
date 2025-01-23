@@ -62,7 +62,7 @@ class MonitorAgent(BaseAgent):
         # Monitoring state
         self.is_monitoring = False
         self.monitor_thread = None
-        self.collection_interval = 30  # seconds
+        self.collection_interval = 10  # seconds
         self.session_id = None
         
     def _collect_activity_data(self) -> Dict[str, Any]:
@@ -91,6 +91,84 @@ class MonitorAgent(BaseAgent):
         
         return activity_data
     
+    def _format_window_summaries(self, window_sessions: List[Dict[str, Any]]) -> str:
+        """Format window summaries for LLM analysis.
+
+        Args:
+            window_sessions: List of window sessions
+
+        Returns:
+            Formatted window summaries
+        """
+        summary_parts = ["The user"]
+        merged_sessions = []
+        last_session = None
+        last_window = None
+
+        for session in window_sessions:
+            duration = session['duration']
+            if duration < 1:
+                continue
+            if (
+                last_session
+                and session['window_class'] == last_session['window_class']
+                and session['window_title'] == last_session['window_title']
+                
+            ):
+                # Merge sessions
+                merged_sessions[-1]['duration'] += duration
+                merged_sessions[-1]['key_events'].extend(session.get('key_events',[]))
+                merged_sessions[-1]['key_count'] += session.get('key_count',0)
+                merged_sessions[-1]['click_count'] += session.get('click_count',0)
+                merged_sessions[-1]['scroll_count'] += session.get('scroll_count',0)
+                last_session = merged_sessions[-1]
+            else:
+                # Add new session
+                merged_sessions.append(session)
+                last_session = session
+
+        for i, session in enumerate(merged_sessions):
+            window_class = session['window_class']
+            window_title = session['window_title']
+            duration = session['duration']
+            key_count = session['key_count']
+            click_count = session['click_count']
+            scroll_count = session['scroll_count']
+
+            actions = []
+            if key_count > 0:
+                typed_chars = "".join(
+                    [event['key'] for event in session['key_events'] if event['type'] == 'press']
+                )
+                actions.append(f"typed '{typed_chars}'")
+            if click_count > 0:
+                actions.append(f"clicked {click_count} time{'s' if click_count > 1 else ''}")
+            if scroll_count > 0:
+                actions.append(f"scrolled {scroll_count} time{'s' if scroll_count > 1 else ''}")
+
+            action_string = ""
+            if actions:
+                if len(actions) == 1:
+                    action_string = actions[0]
+                elif len(actions) > 1:
+                    action_string = ", and ".join([", ".join(actions[:-1]), actions[-1]])
+            else:
+                action_string = "did nothing"
+
+            if i == 0:
+                summary_parts.append(f" was on window class '{window_class}' with title '{window_title}' for {duration:.1f} seconds and {action_string}.")
+            else:
+                summary_parts.append(f" switched to window class '{window_class}' with title '{window_title}' for {duration:.1f} seconds and {action_string}.")
+            
+
+            if i < len(merged_sessions) - 1:
+                next_session = merged_sessions[i+1]
+                next_window_class = next_session['window_class']
+                next_window_title = next_session['window_title']
+                last_window = (window_class, window_title)
+
+        return " ".join(summary_parts).replace("  "," ")
+    
     def _get_llm_analysis(self, activity_data: Dict[str, Any]) -> str:
         """Get LLM analysis of the activity data.
         
@@ -101,30 +179,34 @@ class MonitorAgent(BaseAgent):
             LLM's analysis of the activity
         """
         try:
+            print(f"Activity data without screenshot: {activity_data.get('window_sessions')}")
+
             # Prepare window activity summary
-            window_summaries = []
-            for session in activity_data.get("window_sessions", []):
-                window_summaries.append(
-                    f"- {session['window_class']} ({session['window_title']})\n"
-                    f"  Duration: {session['duration']:.1f}s\n"
-                    f"  Interaction: {session['key_count']} keys, {session['click_count']} clicks, "
-                    f"{session['scroll_count']} scrolls"
-                )
+            window_summaries = self._format_window_summaries(activity_data.get("window_sessions", []))
             
+            print(f"Window summaries: {window_summaries}")
+
             # Calculate time since last observation
             has_previous_logs = False
+            previous_logs = []
             try:
-                last_log = self.get_recent_logs(1)
-                if last_log:
-                    last_time = datetime.fromisoformat(last_log[0]["timestamp"])
+                # Get up to 3 most recent logs from this session
+                recent_logs = self.get_recent_logs(3)
+                if recent_logs:
+                    # Get the last log for duration calculation
+                    last_log = recent_logs[0]
+                    last_time = datetime.fromisoformat(last_log["timestamp"])
                     current_time = datetime.fromisoformat(activity_data["timestamp"])
                     duration = (current_time - last_time).total_seconds()
                     has_previous_logs = True
+                    
+                    # Extract LLM responses from recent logs
+                    previous_logs = [log.get("llm_response", "") for log in recent_logs if log.get("llm_response")]
                 else:
                     duration = self.collection_interval
             except Exception:
                 duration = self.collection_interval
-            
+
             # Prepare context for prompts
             context = {
                 "timestamp": activity_data["timestamp"],
@@ -134,7 +216,8 @@ class MonitorAgent(BaseAgent):
                 "total_clicks": activity_data["counts"]["total_clicks"],
                 "total_scrolls": activity_data["counts"]["total_scrolls"],
                 "screenshot_available": "screenshot" in activity_data,
-                "has_previous_logs": has_previous_logs
+                "has_previous_logs": has_previous_logs,
+                "previous_logs": previous_logs
             }
             
             # Load prompts
@@ -159,11 +242,12 @@ class MonitorAgent(BaseAgent):
                 })
             
             # Call LLM with the content structure as the prompt
-            response = self.call_llm(
-                prompt=content,
-                temperature=0.7,
-                system_prompt=system_prompt
-            )
+            # response = self.call_llm(
+            #     prompt=content,
+            #     temperature=0.7,
+            #     system_prompt=system_prompt
+            # )
+            return "Test"
             
             return response if response else "No analysis available"
             
@@ -198,7 +282,10 @@ class MonitorAgent(BaseAgent):
             
             # Get LLM analysis asynchronously
             try:
-                llm_response = self._get_llm_analysis(data)
+                data_copy = data.copy()
+                data_copy.pop("screenshot")
+                print(f"data: {data_copy}")
+                llm_response = self._get_llm_analysis(data_copy)
                 # Update the stored data with LLM response
                 self.db_tools.update_entity(
                     "activity_log",
@@ -281,7 +368,7 @@ class MonitorAgent(BaseAgent):
                 
             # Query logs from current session, ordered by timestamp
             query = {
-                "id": self.session_id
+                "session_id": self.session_id
             }
             logs = self.db_tools.query_entities(
                 "activity_log",
@@ -315,6 +402,8 @@ class MonitorAgent(BaseAgent):
                 # Collect and store activity data
                 activity_data = self._collect_activity_data()
                 self._store_activity_data(activity_data)
+
+                print(f"Stored now. Collection interval: {self.collection_interval}")
                 
                 # Wait for next collection interval
                 time.sleep(self.collection_interval)

@@ -1,52 +1,23 @@
-Analyze this activity snapshot and provide a detailed scientific observation of the user's behavior and work patterns.
+Observe and describe the current activity snapshot:
 
-OBSERVATION PERIOD:
+CURRENT ACTIVITY:
 Timestamp: {{timestamp}}
 Duration: {{duration}} seconds
+Window Activity: {{window_summaries}}
+Interaction Metrics:
+- Keys: {{total_keys}}
+- Clicks: {{total_clicks}}
+- Scrolls: {{total_scrolls}}
 
-ACTIVITY SUMMARY:
-{{window_summaries}}
-
-INTERACTION METRICS:
-- Keyboard Events: {{total_keys}}
-- Mouse Clicks: {{total_clicks}}
-- Scroll Events: {{total_scrolls}}
-
-{% if screenshot_available %}
-A screenshot of the activity state is attached for visual analysis.
+{% if previous_logs %}
+RECENT CONTEXT:
+{{previous_logs}}  # Last 2 activity logs
 {% endif %}
 
-Please provide a comprehensive analysis that includes:
+Provide a 1-2 sentence observation that captures:
+- The specific task or work currently in focus
+- How it relates to or differs from recent activity
+- Any notable changes in work context or focus
+- Details that help understand what the user is trying to accomplish
 
-1. Primary Activity Focus:
-   - Main applications/windows in use
-   - Nature of the interaction (reading, writing, coding, etc.)
-   - Intensity and engagement level
-
-2. Behavioral Patterns:
-   - Task switching frequency and context
-   - Multitasking indicators
-   - Focus duration and attention patterns
-
-3. Work/Activity Classification:
-   - Type of work being performed
-   - Tools and resources being utilized
-   - Apparent goals or objectives
-
-4. Notable Observations:
-   - Unusual patterns or behaviors
-   - Productivity indicators
-   - Environmental or contextual factors
-
-5. Comparative Analysis:
-   {% if has_previous_logs %}
-   - Changes from previous observations
-   - Emerging patterns or trends
-   - Potential workflow optimizations
-   {% else %}
-   - Initial baseline observation
-   - Preliminary pattern identification
-   - Suggested areas for future analysis
-   {% endif %}
-
-Format your response as a scientific observation, maintaining objectivity while providing detailed insights that could be valuable for long-term behavioral analysis. 
+Keep your response clear and descriptive, focusing on what's happening rather than evaluating it. Aim to provide rich context that will be valuable for later analysis of the work session.

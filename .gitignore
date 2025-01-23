@@ -55,3 +55,6 @@ Thumbs.db
 
 # Screenshots
 screenshots/
+
+# Prevent accidental commit of responses.txt which I use for debugging SQL queries
+responses.txt
