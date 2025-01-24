@@ -1,0 +1,22 @@
+Analyze the last 5 minutes of user activity:
+
+ACTIVITY SUMMARY:
+Duration: {{duration}}
+Window Activity Summary:
+{{window_summaries}}
+
+Aggregate Metrics:
+- Total Keys: {{total_keys}}
+- Total Clicks: {{total_clicks}}
+- Total Scrolls: {{total_scrolls}}
+
+Recent 30-second Analyses:
+{{recent_analyses}}
+
+Provide a 2-3 sentence summary that captures:
+- The main tasks or objectives pursued during this period
+- Any significant patterns or changes in work focus
+- How the user's activity evolved over these 5 minutes
+- Signs of task completion, progress, or workflow challenges
+
+Focus on identifying broader patterns and connecting individual moments into a coherent narrative of work progress.

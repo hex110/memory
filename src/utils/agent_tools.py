@@ -84,6 +84,10 @@ class AgentDatabaseTools:
         "monitor": {
             "read_methods": ["get_entities", "query_entities", "get_entity"],
             "write_methods": ["add_entity", "update_entity"]  # Allow both add and update for activity logs
+        },
+        "analysis": {
+            "read_methods": ["get_entities", "query_entities", "get_entity"],
+            "write_methods": ["add_entity", "update_entity"]  # Allow both add and update for activity logs
         }
     }
     

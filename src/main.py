@@ -1,8 +1,10 @@
 """Main entry point for the memory system."""
 
+from datetime import datetime
 import os
 import json
 import logging
+import uuid
 import psycopg2
 import time
 import threading
@@ -16,6 +18,7 @@ from src.database.postgresql import PostgreSQLDatabase
 from src.ontology.manager import OntologyManager
 from src.agent.analyzer_agent import AnalyzerAgent
 from src.agent.curator_agent import CuratorAgent
+from src.agent.analysis_agent import AnalysisAgent
 from src.agent.monitor_agent import MonitorAgent
 from src.utils.config import load_config, ConfigError
 from src.utils.exceptions import DatabaseError
@@ -211,28 +214,197 @@ def run_monitoring(config_path: str, db: PostgreSQLDatabase):
     logger.info("Starting activity monitoring...")
     
     ontology = OntologyManager(initial_schema=get_ontology_schema())
+
+    session_id = str(uuid.uuid4())
+
+    # Initialize the agents
     monitor = MonitorAgent(
         config_path=config_path,
         prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
         db_interface=db,
-        ontology_manager=ontology
+        ontology_manager=ontology,
+        session_id=session_id
+    )
+
+    analyzer = AnalysisAgent(
+        config_path=config_path,
+        prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
+        db_interface=db,
+        ontology_manager=ontology,
+        session_id=session_id
     )
     
     try:
-        result = monitor.execute()
+        # Start monitoring
+        monitor_result = monitor.execute()
         logger.info("Monitoring started successfully")
-        logger.info(json.dumps(result, indent=2))
+        logger.info(json.dumps(monitor_result, indent=2))
+
         
-        # Keep the main thread alive while monitoring runs in background
+        
+        # Start analysis
+        analyzer_result = analyzer.execute()
+        logger.info("Analysis started successfully")
+        logger.info(json.dumps(analyzer_result, indent=2))
+        
+        # Keep the main thread alive while both run in background
         try:
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
-            logger.info("Stopping monitoring...")
+            logger.info("Stopping monitoring and analysis...")
             monitor.stop_monitoring()
+            analyzer.stop_analysis_cycles()
             
     except Exception as e:
-        logger.error(f"Monitoring failed: {e}")
+        logger.error(f"Monitoring/Analysis failed: {e}")
+        raise
+
+def save_analyses_to_files(db: PostgreSQLDatabase, session_id: str):
+    """Save all analyses for a session to separate files based on type.
+    
+    Args:
+        db: Database interface
+        session_id: Session ID to get analyses for
+    """
+    # Get all analyses for the session
+    query = {"session_id": session_id}
+    analyses = db.query_entities(
+        "activity_analysis",
+        query,
+        sort_by="start_timestamp",
+        sort_order="asc"
+    )
+    
+    # Check if session is ongoing
+    latest_activity = db.query_entities(
+        "activity_raw",
+        {"session_id": session_id},
+        sort_by="timestamp",
+        sort_order="desc",
+        limit=1
+    )
+    # print latest activity without screenshot
+    latest_time = latest_activity[0]["timestamp"]
+    latest_time_float = datetime.fromisoformat(latest_time).timestamp()
+    is_ongoing = (time.time() - latest_time_float) < 60 if latest_activity else False
+    session_status = "[ONGOING SESSION]" if is_ongoing else "[COMPLETED SESSION]"
+    
+    # Prepare files
+    with open("responses.txt", "w") as all_file, \
+         open("regular_responses.txt", "w") as regular_file, \
+         open("special_responses.txt", "w") as special_file, \
+         open("final_response.txt", "w") as final_file:
+        
+        # Write session status to each file
+        for f in [all_file, regular_file, special_file, final_file]:
+            f.write(f"{session_status}\nSession ID: {session_id}\n\n")
+        
+        # Write analyses to appropriate files
+        for analysis in analyses:
+            timestamp = analysis["start_timestamp"]
+            analysis_type = analysis["analysis_type"]
+            response = analysis["llm_response"]
+            
+            # Write to all responses file
+            all_file.write(f"({analysis_type}) {timestamp}: {response}\n\n")
+            
+            # Write to type-specific file
+            if analysis_type == "regular":
+                regular_file.write(f"{timestamp}: {response}\n\n")
+            elif analysis_type == "special":
+                special_file.write(f"{timestamp}: {response}\n\n")
+            elif analysis_type == "final":
+                final_file.write(f"{timestamp}: {response}\n\n")
+
+def get_last_session_id(db: PostgreSQLDatabase) -> str:
+    """Get the ID of the last/current session.
+    
+    Args:
+        db: Database interface
+        
+    Returns:
+        Last session ID
+    """
+    sessions = db.query_entities(
+        "activity_raw",
+        {},
+        sort_by="timestamp",
+        sort_order="desc",
+        limit=1
+    )
+    if not sessions:
+        raise ValueError("No sessions found")
+    return sessions[0]["session_id"]
+
+def has_final_analysis(db: PostgreSQLDatabase, session_id: str) -> Optional[Dict[str, Any]]:
+    """Check if a session has a final analysis.
+    
+    Args:
+        db: Database interface
+        session_id: Session ID to check
+        
+    Returns:
+        Final analysis if exists, None otherwise
+    """
+    query = {
+        "session_id": session_id,
+        "analysis_type": "final"
+    }
+    analyses = db.query_entities(
+        "activity_analysis",
+        query,
+        limit=1
+    )
+    return analyses[0] if analyses else None
+
+def analyze_session(config_path: str, db: PostgreSQLDatabase, session_id: Optional[str] = None, custom_prompt_path: Optional[str] = None):
+    """Analyze a specific session or the last completed session."""
+    logger.info("Starting session analysis...")
+    
+    ontology = OntologyManager(initial_schema=get_ontology_schema())
+    analyzer = AnalysisAgent(
+        config_path=config_path,
+        prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
+        db_interface=db,
+        ontology_manager=ontology,
+        session_id=session_id
+    )
+
+    try:
+        # If no session_id provided, get the last completed session
+        if not session_id:
+            # Query the last session from activity_raw
+            query = {}
+            sessions = db.query_entities(
+                "activity_raw",
+                query,
+                sort_by="timestamp",
+                sort_order="desc",
+                limit=1
+            )
+            if not sessions:
+                raise ValueError("No completed sessions found")
+            session_id = sessions[0]["session_id"]
+            
+        # Load custom prompt if provided
+        custom_prompt = None
+        if custom_prompt_path:
+            try:
+                with open(custom_prompt_path, 'r') as f:
+                    custom_prompt = f.read()
+            except Exception as e:
+                logger.error(f"Failed to load custom prompt: {e}")
+                raise
+
+        # Run the analysis with from_cli=True
+        result = analyzer.analyze_session(session_id, custom_prompt)
+        
+        logger.info(f"Analysis complete for session {session_id}:")
+        logger.info(json.dumps(result, indent=2))
+        
+    except Exception as e:
+        logger.error(f"Session analysis failed: {e}")
         raise
 
 def main():
@@ -244,6 +416,13 @@ def main():
         group.add_argument('-server', action='store_true', help='Run the API server')
         group.add_argument('-analyze', action='store_true', help='Analyze test conversation')
         group.add_argument('-track', action='store_true', help='Start activity monitoring')
+        group.add_argument('-analyze-session', action='store_true', help='Analyze the last completed session')
+        group.add_argument('-log', action='store_true', help='Log analyses to files')
+
+        # Add session analysis arguments
+        parser.add_argument('-session-id', type=str, help='Specific session ID to analyze')
+        parser.add_argument('-custom-prompt', type=str, help='Path to custom analysis prompt file')
+
         args = parser.parse_args()
 
         # Ensure config exists
@@ -255,7 +434,46 @@ def main():
         # Initialize components
         db = init_database(config)
         
-        if args.analyze:
+        if args.analyze_session:
+            session_id = args.session_id
+            if not session_id:
+                session_id = get_last_session_id(db)
+                
+            # Check for existing final analysis
+            final_analysis = has_final_analysis(db, session_id)
+            if final_analysis and not args.custom_prompt:
+                # Save existing final analysis
+                with open("analysis.txt", "w") as f:
+                    f.write(f"Session ID: {session_id}\n\n")
+                    f.write(final_analysis["llm_response"])
+            else:
+                # Generate new analysis
+                analyzer = AnalysisAgent(
+                    config_path=config_path,
+                    prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
+                    db_interface=db,
+                    ontology_manager=OntologyManager(initial_schema=get_ontology_schema()),
+                    session_id=session_id
+                )
+                
+                custom_prompt = None
+                if args.custom_prompt:
+                    with open(args.custom_prompt, 'r') as f:
+                        custom_prompt = f.read()
+                
+                result = analyzer.analyze_session(session_id, custom_prompt)
+                
+                with open("analysis.txt", "w") as f:
+                    f.write(f"Session ID: {session_id}\n\n")
+                    f.write(result["analysis"])
+                    
+        elif args.log:
+            session_id = args.session_id
+            if not session_id:
+                session_id = get_last_session_id(db)
+            save_analyses_to_files(db, session_id)
+            
+        elif args.analyze:
             analyze_test_conversation(config_path, db)
         elif args.server:
             logger.info("Starting API server...")
@@ -263,7 +481,7 @@ def main():
         elif args.track:
             run_monitoring(config_path, db)
         else:
-            logger.info("No mode specified. Use -server to run the API server, -analyze to analyze test conversation, or -track to start monitoring")
+            logger.info("No mode specified. Use -server to run the API server, -analyze to analyze test conversation, -track to start monitoring, -analyze-session to analyze a work session, or -log to save analyses to files")
             parser.print_help()
         
     except KeyboardInterrupt:
@@ -274,183 +492,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-# If I want to run tests in main, run server in different thread
-# server_thread = threading.Thread(target=run_server)
-#         server_thread.daemon = True  # Allow the thread to be killed when main 
-#         exits
-#         server_thread.start()
-
-# Run API tests
-# test_api_pipeline()
-
-# ontology = OntologyManager(initial_schema=get_ontology_schema())
-#         # Initialize analyzer agent
-#         analyzer = AnalyzerAgent(
-#             config_path=config_path,
-#             prompt_folder=os.path.join(os.path.dirname(__file__), "agent", 
-#             "prompts"),
-#             db_interface=db,
-#             ontology_manager=ontology
-#         )
-
-#         # Initialize curator agent
-#         curator = CuratorAgent(
-#             config_path=config_path,
-#             prompt_folder=os.path.join(os.path.dirname(__file__), "agent", 
-#             "prompts"),
-#             db_interface=db,
-#             ontology_manager=ontology
-#         )
-        
-#         # Test conversations for analysis
-#         test_conversations = [
-#             {
-#                 "id": "test_1",
-#                 "content": """
-#                 Assistant: Let's explore how you handle work and challenges. 
-#                 What's your approach to solving complex problems?
-
-#                 User: I love diving into complex problems! I usually start by 
-#                 breaking them down into smaller pieces and creating a detailed 
-#                 plan. I get really excited about finding innovative solutions, 
-#                 even if it means taking some risks. Sometimes I can get so 
-#                 absorbed that I lose track of time.
-
-#                 Assistant: That's interesting! And how do you typically work with 
-#                 others in a team setting?
-
-#                 User: I'm actually quite energetic in team settings and enjoy 
-#                 brainstorming sessions. I like to take initiative and propose new 
-#                 ideas, though sometimes I might come across as too enthusiastic. 
-#                 I do try to make sure everyone gets a chance to speak, but I 
-#                 often find myself naturally taking the lead.
-
-#                 Assistant: How do you handle setbacks or when things don't go 
-#                 according to plan?
-
-#                 User: I try to stay positive and see setbacks as learning 
-#                 opportunities. Sure, it can be frustrating initially, but I 
-#                 quickly start looking for alternative approaches. I'm pretty 
-#                 adaptable and don't mind changing course if something isn't 
-#                 working. That said, I can be a bit impatient sometimes when 
-#                 things move too slowly.
-
-#                 Assistant: What about your learning style? How do you approach 
-#                 new skills or knowledge?
-
-#                 User: I'm a very hands-on learner. I prefer jumping in and 
-#                 experimenting rather than reading long manuals. I get excited 
-#                 about learning new things and often have multiple projects or 
-#                 courses going at once. Sometimes I might start too many things at 
-#                 once, but I'm always eager to expand my knowledge and try new 
-#                 approaches.
-#                 """,
-#                 "timestamp": "2024-01-20T14:00:00Z",
-#                 "analyzed": False
-#             },
-#             {
-#                 "id": "test_2",
-#                 "content": """
-#                 Assistant: I'd like to understand how you navigate social 
-#                 situations and relationships. Could you tell me about how you 
-#                 typically interact in social gatherings?
-
-#                 User: Well, it's interesting... I tend to observe first before 
-#                 fully engaging. I enjoy social gatherings, but I need to get a 
-#                 feel for the dynamics. Sometimes I find myself playing different 
-#                 roles - like being the mediator when there's tension, or the one 
-#                 who draws out quieter people. But I also notice I need breaks to 
-#                 recharge, especially after intense social interactions.
-
-#                 Assistant: That's fascinating. How do you handle emotional 
-#                 situations, whether your own emotions or others'?
-
-#                 User: I've learned to be more mindful about emotions over time. I 
-#                 used to try to fix everything immediately, but now I recognize 
-#                 sometimes people just need someone to listen. I'm pretty good at 
-#                 reading subtle cues in others' behavior, though this sensitivity 
-#                 can sometimes be overwhelming. I process my own emotions by 
-#                 writing or going for long walks - it helps me understand what I'm 
-#                 really feeling and why.
-
-#                 Assistant: Could you share how you approach personal goals and 
-#                 growth?
-
-#                 User: I'm quite methodical about personal development, actually. 
-#                 I like to set structured goals but keep them flexible enough to 
-#                 adapt. I've noticed I'm most successful when I balance pushing 
-#                 myself with being realistic. The interesting part is that I often 
-#                 find myself achieving goals in unexpected ways - like starting a 
-#                 project for one reason and discovering it fulfills a completely 
-#                 different personal goal.
-
-#                 Assistant: How do you deal with conflicts or disagreements in 
-#                 your relationships?
-
-#                 User: That's evolved a lot for me. I used to avoid conflicts 
-#                 entirely, but I've learned that addressing issues early prevents 
-#                 bigger problems. I try to understand the other person's 
-#                 perspective first, though sometimes I catch myself preparing my 
-#                 response before they finish speaking - it's something I'm working 
-#                 on. I value harmony but not at the expense of authenticity. 
-#                 Sometimes I surprise myself by being quite firm on my boundaries, 
-#                 especially when it comes to core values.
-
-#                 Assistant: What about your approach to making important decisions?
-
-#                 User: It's a bit of a paradox, really. I gather lots of 
-#                 information and analyze thoroughly, but I also trust my intuition 
-#                 strongly. Sometimes I find myself making lists and weighing pros 
-#                 and cons, only to realize I knew the answer instinctively from 
-#                 the start. I tend to consider how my decisions might affect 
-#                 others, maybe sometimes too much. I've noticed I'm more confident 
-#                 with professional decisions than personal ones - there's an 
-#                 interesting disconnect there that I'm trying to understand better.
-
-#                 Assistant: How do you handle unexpected changes or disruptions to 
-#                 your plans?
-
-#                 User: *laughs* That's been a journey of growth! I used to get 
-#                 really thrown off by unexpected changes, but I've developed this 
-#                 sort of... flexible resilience, I guess you could call it. I 
-#                 still like having backup plans - actually, usually backup plans 
-#                 for my backup plans - but I've learned to find opportunities in 
-#                 chaos. Though I have to admit, I still sometimes catch myself 
-#                 trying to control things that really aren't controllable. It's 
-#                 interesting how often the unexpected detours end up leading to 
-#                 better outcomes than my original plans.
-#                 """,
-#                 "timestamp": "2024-01-21T15:30:00Z",
-#                 "analyzed": False
-#             }
-#         ]
-        
-        # Comment out previous tests
-        # """
-        # # Comment out analysis for now
-        # for conversation in test_conversations:
-        #     logger.info(f"Running analysis on conversation {conversation['id']}...
-        #     ")
-        #     result = analyzer.analyze_conversation(conversation)
-        #     logger.info(f"Analysis complete for {conversation['id']}:")
-        #     logger.info(json.dumps(result, indent=2))
-
-        # # Test blog customization request
-        # test_request = {
-        #     "user_id": "user123",
-        #     "content_type": "technical_blog",
-        #     "customization_aspects": [
-        #         "content_style",
-        #         "visual_preferences",
-        #         "reading_level"
-        #     ],
-        #     "context": {
-        #         "article_topic": "Machine Learning Architecture Patterns",
-        #         "target_audience": "Software Engineers",
-        #         "estimated_read_time": "15 minutes"
-        #     }
-        # }
-        
-        # logger.info("Testing blog customization...")
-        # customization_result = curator.execute(test_request)
-        # """

@@ -488,8 +488,24 @@ class PostgreSQLDatabase(DatabaseInterface):
             where_clauses = []
             values = []
             for field, value in query.items():
-                where_clauses.append(f"{field} = %s")
-                values.append(value)
+                if isinstance(value, dict):
+                    # Handle comparison operators
+                    for op, op_value in value.items():
+                        operator = {
+                            ">=": ">=",
+                            "<=": "<=",
+                            ">": ">",
+                            "<": "<",
+                            "=": "=",
+                            "!=": "!="
+                        }.get(op)
+                        if operator:
+                            where_clauses.append(f"{field} {operator} %s")
+                            values.append(op_value)
+                else:
+                    # Handle simple equality
+                    where_clauses.append(f"{field} = %s")
+                    values.append(value)
             
             where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
             

@@ -1,0 +1,24 @@
+Analyze this complete work session:
+
+SESSION DETAILS:
+Start Time: {{start_time}}
+End Time: {{end_time}}
+Duration: {{duration}}
+
+Previous Analyses:
+{% for analysis in analyses %}
+- {{analysis}}
+{% endfor %}
+
+{% if custom_prompt %}
+{{custom_prompt}}
+{% else %}
+Provide a comprehensive summary of this work session that includes:
+1. Main tasks and objectives pursued
+2. Key accomplishments or progress made
+3. Notable work patterns and habits observed
+4. Significant transitions or changes in focus
+5. Overall work rhythm and productivity patterns
+
+End with specific insights about the user's work style and any patterns that could inform workflow optimization.
+{% endif %}

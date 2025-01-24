@@ -57,4 +57,12 @@ Thumbs.db
 screenshots/
 
 # Prevent accidental commit of responses.txt which I use for debugging SQL queries
+analysis.txt
 responses.txt
+
+regular_responses.txt
+special_responses.txt
+final_response.txt
+
+custom_prompt.txt
+instructions.txt
