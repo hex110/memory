@@ -105,13 +105,9 @@ class MonitorAgent(BaseAgent):
                 
                 # Store activity data
                 self._store_activity_data(activity_data)
-
-                print(f"Before sleep: {self.collection_interval}")
                 
                 # Wait for next collection interval
                 time.sleep(self.collection_interval)
-
-                print(f"After sleep: {self.collection_interval}")
                 
             except Exception as e:
                 self.logger.error(f"Error in monitoring loop: {e}")
@@ -146,8 +142,6 @@ class MonitorAgent(BaseAgent):
             try:
                 self.db_tools.add_entity("activity_raw", current_timestamp, storage_data)
 
-
-                print(f"1 Broadcasting activity stored event")
                 # Broadcast activity stored event
                 event = ActivityEvent(
                     session_id=self.session_id,
@@ -155,9 +149,7 @@ class MonitorAgent(BaseAgent):
                     data=storage_data,
                     event_type=ActivityEventType.ACTIVITY_STORED
                 )
-                print(f"2 Broadcasting activity stored event")
                 self.event_system.broadcaster.broadcast(event)
-                print(f"3 Broadcasting activity stored event")
 
             except Exception as e:
                 if "duplicate key" in str(e):

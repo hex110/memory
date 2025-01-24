@@ -300,9 +300,14 @@ def save_analyses_to_files(db: PostgreSQLDatabase, session_id: str):
         for f in [all_file, regular_file, special_file, final_file]:
             f.write(f"{session_status}\nSession ID: {session_id}\n\n")
         
+        for analysis in analyses:
+            analysis["end_timestamp"] = datetime.fromisoformat(analysis["end_timestamp"])
+
+        analyses.sort(key=lambda x: x["end_timestamp"])
+
         # Write analyses to appropriate files
         for analysis in analyses:
-            timestamp = analysis["start_timestamp"]
+            timestamp = analysis["end_timestamp"]
             analysis_type = analysis["analysis_type"]
             response = analysis["llm_response"]
             

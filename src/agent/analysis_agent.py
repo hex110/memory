@@ -42,7 +42,7 @@ class AnalysisAgent(BaseAgent):
         self.is_running = False
         self.completed_analyses = 0
 
-        self.collection_interval = self.config.get("activity_log_interval", 10)  # seconds
+        self.collection_interval = self.config.get("activity_log_interval", 30)  # seconds
         self.repeat_interval = 10
         
     def start_analysis_cycles(self):
@@ -89,6 +89,15 @@ class AnalysisAgent(BaseAgent):
                 analysis = self._analyze_short_term(raw_data)
                 self._store_analysis(analysis, "regular")
 
+                # Broadcast analysis stored event
+                event = ActivityEvent(
+                    session_id=self.session_id,
+                    timestamp=analysis["start_time"],
+                    data=analysis,
+                    event_type=ActivityEventType.ANALYSIS_STORED
+                )
+                self.event_system.broadcaster.broadcast(event)
+
         except Exception as e:
             self.logger.error(f"Error handling activity stored event: {e}")
 
@@ -103,10 +112,9 @@ class AnalysisAgent(BaseAgent):
                 end_time = datetime.now()
                 start_time = end_time - timedelta(seconds=(self.collection_interval * self.repeat_interval))
                 raw_data = self._get_recent_raw_data(start_time, end_time)
-                recent_analyses = self._get_recent_analyses(start_time, end_time)
                 
                 if raw_data:
-                    analysis = self._analyze_medium_term(raw_data, recent_analyses)
+                    analysis = self._analyze_medium_term(raw_data)
                     self._store_analysis(analysis, "special")
                 
                 self.completed_analyses = 0
@@ -151,28 +159,42 @@ class AnalysisAgent(BaseAgent):
                     record["window_sessions"] = []
         return raw_data
 
-    def _get_recent_analyses(self, start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
+    def _get_recent_analyses(
+        self, 
+        end_time: datetime, 
+        start_time: Optional[datetime] = None,
+        limit: Optional[int] = None,
+        analysis_type: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """Get recent analyses for a time period.
         
         Args:
-            start_time: Start of the time period
             end_time: End of the time period
-            
+            start_time: Start of the time period (optional)
+            limit: Maximum number of records to return (optional)
+            analysis_type: Type of analysis to filter by (optional)
+                
         Returns:
             List of analysis records
         """
         query = {
             "start_timestamp": {
-                ">=": start_time.isoformat(),
                 "<=": end_time.isoformat()
             }
         }
+        
+        if start_time:
+            query["start_timestamp"][">="] = start_time.isoformat()
+        
+        if analysis_type:
+            query["analysis_type"] = analysis_type
         
         return self.db_tools.query_entities(
             "activity_analysis",
             query,
             sort_by="start_timestamp",
-            sort_order="asc"
+            sort_order="desc",
+            limit=limit
         )
 
     def _format_window_summaries(self, window_sessions: List[Dict[str, Any]]) -> str:
@@ -261,6 +283,12 @@ class AnalysisAgent(BaseAgent):
         end_time = raw_data[-1]["timestamp"]
         source_ids = [record["id"] for record in raw_data]
         
+        # Get recent analyses
+        recent_logs = self._get_recent_analyses(
+            end_time=datetime.fromisoformat(start_time),
+            limit=3
+        )
+
         # Format data for LLM
         window_sessions = []
         total_keys = 0
@@ -278,7 +306,8 @@ class AnalysisAgent(BaseAgent):
             "total_keys": total_keys,
             "total_clicks": total_clicks,
             "total_scrolls": total_scrolls,
-            "duration": self.collection_interval
+            "duration": self.collection_interval,
+            "previous_logs": [log["llm_response"] for log in recent_logs] if recent_logs else None
         }
         
         # Get LLM analysis
@@ -300,8 +329,7 @@ class AnalysisAgent(BaseAgent):
 
     def _analyze_medium_term(
         self,
-        raw_data: List[Dict[str, Any]],
-        recent_analyses: List[Dict[str, Any]]
+        raw_data: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """Analyze 5 minutes of activity data.
         
@@ -318,6 +346,11 @@ class AnalysisAgent(BaseAgent):
         start_time = raw_data[0]["timestamp"]
         end_time = raw_data[-1]["timestamp"]
         source_ids = [record["id"] for record in raw_data]
+
+        recent_logs = self._get_recent_analyses(
+            end_time=datetime.fromisoformat(start_time),
+            limit=10
+        )
         
         # Prepare context with both raw data and recent analyses
         context = {
@@ -328,8 +361,8 @@ class AnalysisAgent(BaseAgent):
             "total_keys": sum(r["total_keys_pressed"] for r in raw_data),
             "total_clicks": sum(r["total_clicks"] for r in raw_data),
             "total_scrolls": sum(r["total_scrolls"] for r in raw_data),
-            "recent_analyses": [a["llm_response"] for a in recent_analyses],
-            "duration": self.collection_interval * 5
+            "recent_analyses": [log["llm_response"] for log in recent_logs] if recent_logs else None,
+            "duration": self.collection_interval * self.repeat_interval
         }
         
         # Get LLM analysis
@@ -372,14 +405,6 @@ class AnalysisAgent(BaseAgent):
             entity_id = str(uuid.uuid4())
             try:
                 self.db_tools.add_entity("activity_analysis", entity_id, storage_data)
-                # Broadcast analysis stored event
-                event = ActivityEvent(
-                    session_id=self.session_id,
-                    timestamp=analysis_data["start_time"],
-                    data=storage_data,
-                    event_type=ActivityEventType.ANALYSIS_STORED
-                )
-                self.event_system.broadcaster.broadcast(event)
             except Exception as e:
                 if "duplicate key" in str(e):
                     self.db_tools.update_entity("activity_analysis", entity_id, storage_data)

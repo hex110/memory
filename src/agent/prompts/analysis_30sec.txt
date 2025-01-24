@@ -16,8 +16,8 @@ A screenshot of the current state is available for reference.
 {% endif %}
 
 {% if previous_logs %}
-RECENT CONTEXT:
-{{previous_logs}}  # Last 2 logs
+These are the most recent analyses done. They will help you notice how the user's activities are shifting through time. Try to reference them meaningfully, not just out of necessity:
+{{previous_logs}}
 {% endif %}
 
 Provide a 1-2 sentence observation that captures what the user is actually working on, not just which windows are open. Consider:
