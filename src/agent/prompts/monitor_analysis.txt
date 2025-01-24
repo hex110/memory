@@ -1,23 +1,29 @@
-Observe and describe the current activity snapshot:
+Describe what's happening in this moment of the user's work session:
 
 CURRENT ACTIVITY:
 Timestamp: {{timestamp}}
 Duration: {{duration}} seconds
-Window Activity: {{window_summaries}}
+Window Activity:
+{{window_summaries}}
+
 Interaction Metrics:
 - Keys: {{total_keys}}
 - Clicks: {{total_clicks}}
 - Scrolls: {{total_scrolls}}
 
-{% if previous_logs %}
-RECENT CONTEXT:
-{{previous_logs}}  # Last 2 activity logs
+{% if screenshot_available %}
+A screenshot of the current state is available for reference.
 {% endif %}
 
-Provide a 1-2 sentence observation that captures:
-- The specific task or work currently in focus
-- How it relates to or differs from recent activity
-- Any notable changes in work context or focus
-- Details that help understand what the user is trying to accomplish
+{% if previous_logs %}
+RECENT CONTEXT:
+{{previous_logs}}  # Last 2 logs
+{% endif %}
 
-Keep your response clear and descriptive, focusing on what's happening rather than evaluating it. Aim to provide rich context that will be valuable for later analysis of the work session.
+Provide a 1-2 sentence observation that captures what the user is actually working on, not just which windows are open. Consider:
+- What task or goal they appear to be pursuing
+- How this moment connects to their recent activity
+- Any meaningful changes in their work
+- Visual context from the screenshot if available
+
+Focus on building understanding of their work session, not just rephrasing window data.

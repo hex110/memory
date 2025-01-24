@@ -62,34 +62,156 @@ class MonitorAgent(BaseAgent):
         # Monitoring state
         self.is_monitoring = False
         self.monitor_thread = None
-        self.collection_interval = 10  # seconds
+        self.collection_interval = self.config.get("monitor_interval", 10)  # seconds
         self.session_id = None
+    
+    def start_monitoring(self):
+        """Start the activity monitoring process."""
+        if not self.is_monitoring:
+            # Generate session ID only when starting monitoring
+            if not self.session_id:
+                self.session_id = str(uuid.uuid4())
+            
+            self.keyboard_tracker.start()
+            self.is_monitoring = True
+            self.monitor_thread = threading.Thread(target=self._monitoring_loop)
+            self.monitor_thread.daemon = True
+            self.monitor_thread.start()
+            self.logger.info(f"Activity monitoring started with session ID: {self.session_id}")
+    
+    def stop_monitoring(self):
+        """Stop the activity monitoring process."""
+        self.is_monitoring = False
+        if self.monitor_thread:
+            self.monitor_thread.join(timeout=1)
+            self.monitor_thread = None
         
-    def _collect_activity_data(self) -> Dict[str, Any]:
-        """Collect current activity data from all trackers.
+        # Cleanup trackers
+        self.keyboard_tracker.stop()
+        self.screen_capture.cleanup()
+        self.window_manager.cleanup()
         
-        Returns:
-            Dict containing the collected activity data
-        """
-        # Get data from each tracker
-        activity_data = self.keyboard_tracker.get_events()
-        screen_data = self.screen_capture.capture()
+        self.logger.info("Activity monitoring stopped")
+    
+    def _monitoring_loop(self):
+        """Main monitoring loop that collects and stores data periodically."""
+        # Wait for first interval before collecting data
+        time.sleep(self.collection_interval)
         
-        # Add screenshot if captured
-        if screen_data and screen_data.get("image"):
+        while self.is_monitoring:
             try:
-                buffer = BytesIO()
-                screen_data["image"].save(buffer, format="PNG")
-                activity_data["screenshot"] = base64.b64encode(buffer.getvalue()).decode('utf-8')
-                self.logger.info("Successfully encoded screenshot")
+                # Get data from keyboard and windows tracker
+                activity_data = self.keyboard_tracker.get_events()
+
+                # Capture screenshot
+                screen_data = self.screen_capture.capture_and_encode()
+
+                if screen_data:
+                    activity_data["screenshot"] = screen_data
+                
+                # Store activity data
+                self._store_activity_data(activity_data)
+                
+                # Wait for next collection interval
+                time.sleep(self.collection_interval)
+                
             except Exception as e:
-                self.logger.warning(f"Failed to encode screenshot: {e}")
+                self.logger.error(f"Error in monitoring loop: {e}")
+                # Don't break the loop on error, just continue
+                time.sleep(1)
+    
+    def _store_activity_data(self, raw_activity_data: Dict[str, Any]):
+        """Store activity data in the database.
         
-        # Add session ID and timestamp
-        activity_data["session_id"] = self.session_id
-        activity_data["timestamp"] = datetime.now().isoformat()
+        Args:
+            data: Activity data to store
+        """
+        try:
+            # Ensure session_id is set
+            if not self.session_id:
+                self.session_id = str(uuid.uuid4())
+            
+            # Use timestamp as the unique ID for this log
+            current_timestamp = datetime.now().isoformat()
+            
+            # Prepare data for storage
+            storage_data = {
+                # Basic fields
+                "timestamp": current_timestamp,  # Use as ID
+                "session_id": self.session_id,
+                "screenshot": raw_activity_data.get("screenshot") if raw_activity_data.get("screenshot") else None,
+                
+                # Counts
+                "total_keys_pressed": raw_activity_data["counts"]["total_keys_pressed"],
+                "total_clicks": raw_activity_data["counts"]["total_clicks"],
+                "total_scrolls": raw_activity_data["counts"]["total_scrolls"],
+            }
+           
+             # Ensure window sessions are properly serialized
+            if "window_sessions" in raw_activity_data:
+                # Validate each session has required fields
+                for session in raw_activity_data["window_sessions"]:
+                    if not all(k in session for k in ["window_class", "window_title", "duration"]):
+                        self.logger.warning(f"Skipping invalid window session: {session}")
+                        continue
+                
+                # Convert to JSON string
+                storage_data["window_sessions"] = json.dumps(raw_activity_data["window_sessions"])
+            else:
+                storage_data["window_sessions"] = "[]"  # Empty array as string
+            
+            # Store the initial data immediately
+            try:
+                self.db_tools.add_entity("activity_log", current_timestamp, storage_data)
+            except Exception as e:
+                if "duplicate key" in str(e):
+                    self.db_tools.update_entity("activity_log", current_timestamp, storage_data)
+                else:
+                    raise
+            
+            # Get LLM analysis asynchronously
+            try:
+                data_for_analysis = raw_activity_data.copy()
+                self._analyze_activity_data(current_timestamp, data_for_analysis)
+            except Exception as e:
+                self.logger.error(f"Error getting LLM analysis: {e}")
+                # Update with error message
+                self.db_tools.update_entity(
+                    "activity_log",
+                    current_timestamp,
+                    {"llm_response": f"Analysis failed: {str(e)}"}
+                )
+            
+        except Exception as e:
+            self.logger.error(f"Error storing activity data: {e}")
+            
+    def _analyze_activity_data(self, timestamp: str, data: Dict[str, Any]):
+        """Asynchronously analyze activity data with LLM.
+
+        Args:
+            timestamp: Timestamp of the activity data log
+            data: Activity data to analyze (without screenshot)
+        """
+        def analysis_task():
+            try:
+                llm_response = self._get_llm_analysis(data)
+                # Update the stored data with LLM response
+                self.db_tools.update_entity(
+                    "activity_log",
+                    timestamp,
+                    {"llm_response": llm_response}
+                )
+            except Exception as e:
+                 self.logger.error(f"Error in analysis task: {e}")
+                 self.db_tools.update_entity(
+                    "activity_log",
+                    timestamp,
+                    {"llm_response": f"Analysis failed: {str(e)}"}
+                )
         
-        return activity_data
+        analysis_thread = threading.Thread(target=analysis_task)
+        analysis_thread.daemon = True
+        analysis_thread.start()
     
     def _format_window_summaries(self, window_sessions: List[Dict[str, Any]]) -> str:
         """Format window summaries for LLM analysis.
@@ -100,20 +222,18 @@ class MonitorAgent(BaseAgent):
         Returns:
             Formatted window summaries
         """
-        summary_parts = ["The user"]
+        summary_parts = []
         merged_sessions = []
         last_session = None
-        last_window = None
 
         for session in window_sessions:
-            duration = session['duration']
-            if duration < 1:
+            duration = session.get('duration', 0) #Added get here to avoid key errors.
+            if duration < 0.5:
                 continue
             if (
                 last_session
-                and session['window_class'] == last_session['window_class']
-                and session['window_title'] == last_session['window_title']
-                
+                and session.get('window_class') == last_session.get('window_class')
+                and session.get('window_title') == last_session.get('window_title')
             ):
                 # Merge sessions
                 merged_sessions[-1]['duration'] += duration
@@ -128,17 +248,17 @@ class MonitorAgent(BaseAgent):
                 last_session = session
 
         for i, session in enumerate(merged_sessions):
-            window_class = session['window_class']
-            window_title = session['window_title']
-            duration = session['duration']
-            key_count = session['key_count']
-            click_count = session['click_count']
-            scroll_count = session['scroll_count']
+            window_class = session.get('window_class', 'Unknown') # Added a get here to avoid key errors
+            window_title = session.get('window_title', 'Unknown') # Added a get here to avoid key errors
+            duration = session.get('duration', 0) # Added a get here to avoid key errors
+            key_count = session.get('key_count', 0) # Added a get here to avoid key errors
+            click_count = session.get('click_count', 0) # Added a get here to avoid key errors
+            scroll_count = session.get('scroll_count', 0) # Added a get here to avoid key errors
 
             actions = []
             if key_count > 0:
                 typed_chars = "".join(
-                    [event['key'] for event in session['key_events'] if event['type'] == 'press']
+                    [event['key'] for event in session.get('key_events', []) if event['type'] == 'press']
                 )
                 actions.append(f"typed '{typed_chars}'")
             if click_count > 0:
@@ -156,16 +276,9 @@ class MonitorAgent(BaseAgent):
                 action_string = "did nothing"
 
             if i == 0:
-                summary_parts.append(f" was on window class '{window_class}' with title '{window_title}' for {duration:.1f} seconds and {action_string}.")
+                summary_parts.append(f"The user was on window class '{window_class}' with title '{window_title}' for {duration:.1f} seconds and {action_string}.")
             else:
-                summary_parts.append(f" switched to window class '{window_class}' with title '{window_title}' for {duration:.1f} seconds and {action_string}.")
-            
-
-            if i < len(merged_sessions) - 1:
-                next_session = merged_sessions[i+1]
-                next_window_class = next_session['window_class']
-                next_window_title = next_session['window_title']
-                last_window = (window_class, window_title)
+                summary_parts.append(f"The user switched to window class '{window_class}' with title '{window_title}' for {duration:.1f} seconds and {action_string}.")
 
         return " ".join(summary_parts).replace("  "," ")
     
@@ -179,12 +292,10 @@ class MonitorAgent(BaseAgent):
             LLM's analysis of the activity
         """
         try:
-            print(f"Activity data without screenshot: {activity_data.get('window_sessions')}")
-
             # Prepare window activity summary
             window_summaries = self._format_window_summaries(activity_data.get("window_sessions", []))
             
-            print(f"Window summaries: {window_summaries}")
+            # print(f"Window summaries: {window_summaries}")
 
             # Calculate time since last observation
             has_previous_logs = False
@@ -242,12 +353,11 @@ class MonitorAgent(BaseAgent):
                 })
             
             # Call LLM with the content structure as the prompt
-            # response = self.call_llm(
-            #     prompt=content,
-            #     temperature=0.7,
-            #     system_prompt=system_prompt
-            # )
-            return "Test"
+            response = self.call_llm(
+                prompt=content,
+                temperature=0.7,
+                system_prompt=system_prompt
+            )
             
             return response if response else "No analysis available"
             
@@ -255,105 +365,8 @@ class MonitorAgent(BaseAgent):
             self.logger.error(f"Error getting LLM analysis: {e}")
             return f"Analysis failed: {str(e)}"
     
-    def _store_activity_data(self, data: Dict[str, Any]):
-        """Store activity data in the database.
-        
-        Args:
-            data: Activity data to store
-        """
-        try:
-            # Ensure session_id is set
-            if not self.session_id:
-                self.session_id = str(uuid.uuid4())
-                data["session_id"] = self.session_id
-            
-            # Use timestamp as the unique ID for this log
-            timestamp = data["timestamp"]
-            
-            # Prepare and store the initial data immediately
-            storage_data = self._prepare_data_for_storage(data)
-            try:
-                self.db_tools.add_entity("activity_log", timestamp, storage_data)
-            except Exception as e:
-                if "duplicate key" in str(e):
-                    self.db_tools.update_entity("activity_log", timestamp, storage_data)
-                else:
-                    raise
-            
-            # Get LLM analysis asynchronously
-            try:
-                data_copy = data.copy()
-                data_copy.pop("screenshot")
-                print(f"data: {data_copy}")
-                llm_response = self._get_llm_analysis(data_copy)
-                # Update the stored data with LLM response
-                self.db_tools.update_entity(
-                    "activity_log",
-                    timestamp,
-                    {"llm_response": llm_response}
-                )
-            except Exception as e:
-                self.logger.error(f"Error getting LLM analysis: {e}")
-                # Update with error message
-                self.db_tools.update_entity(
-                    "activity_log",
-                    timestamp,
-                    {"llm_response": f"Analysis failed: {str(e)}"}
-                )
-            
-        except Exception as e:
-            self.logger.error(f"Error storing activity data: {e}")
     
-    def _prepare_data_for_storage(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Prepare activity data for database storage by serializing complex structures.
-        
-        Args:
-            data: Raw activity data
-            
-        Returns:
-            Dict with complex structures serialized for storage
-        """
-        try:
-            storage_data = {
-                # Basic fields
-                "timestamp": data["timestamp"],  # Use as ID
-                "session_id": data["session_id"],
-                "screenshot": data.get("screenshot"),
-                
-                # Counts
-                "total_keys_pressed": data["counts"]["total_keys_pressed"],
-                "total_clicks": data["counts"]["total_clicks"],
-                "total_scrolls": data["counts"]["total_scrolls"],
-            }
-            
-            # Ensure window sessions are properly serialized
-            if "window_sessions" in data:
-                # Validate each session has required fields
-                for session in data["window_sessions"]:
-                    if not all(k in session for k in ["window_class", "window_title", "duration"]):
-                        self.logger.warning(f"Skipping invalid window session: {session}")
-                        continue
-                
-                # Convert to JSON string
-                storage_data["window_sessions"] = json.dumps(data["window_sessions"])
-            else:
-                storage_data["window_sessions"] = "[]"  # Empty array as string
-            
-            return storage_data
-            
-        except Exception as e:
-            self.logger.error(f"Error preparing data for storage: {e}")
-            # Return minimal valid data
-            return {
-                "timestamp": data["timestamp"],
-                "session_id": data["session_id"],
-                "window_sessions": "[]",
-                "total_keys_pressed": 0,
-                "total_clicks": 0,
-                "total_scrolls": 0
-            }
-    
-    def get_recent_logs(self, count: int = 5) -> List[Dict[str, Any]]:
+    def get_recent_logs(self, count: int = 3) -> List[Dict[str, Any]]:
         """Get the most recent activity logs from the current session.
         
         Args:
@@ -392,56 +405,7 @@ class MonitorAgent(BaseAgent):
             self.logger.error(f"Error retrieving recent logs: {e}")
             return []
     
-    def _monitoring_loop(self):
-        """Main monitoring loop that collects and stores data periodically."""
-        # Wait for first interval before collecting data
-        time.sleep(self.collection_interval)
-        
-        while self.is_monitoring:
-            try:
-                # Collect and store activity data
-                activity_data = self._collect_activity_data()
-                self._store_activity_data(activity_data)
-
-                print(f"Stored now. Collection interval: {self.collection_interval}")
-                
-                # Wait for next collection interval
-                time.sleep(self.collection_interval)
-                
-            except Exception as e:
-                self.logger.error(f"Error in monitoring loop: {e}")
-                # Don't break the loop on error, just continue
-                time.sleep(1)
-    
-    def start_monitoring(self):
-        """Start the activity monitoring process."""
-        if not self.is_monitoring:
-            # Generate session ID only when starting monitoring
-            if not self.session_id:
-                self.session_id = str(uuid.uuid4())
-            
-            self.keyboard_tracker.start()
-            self.is_monitoring = True
-            self.monitor_thread = threading.Thread(target=self._monitoring_loop)
-            self.monitor_thread.daemon = True
-            self.monitor_thread.start()
-            self.logger.info(f"Activity monitoring started with session ID: {self.session_id}")
-    
-    def stop_monitoring(self):
-        """Stop the activity monitoring process."""
-        self.is_monitoring = False
-        if self.monitor_thread:
-            self.monitor_thread.join(timeout=1)
-            self.monitor_thread = None
-        
-        # Cleanup trackers
-        self.keyboard_tracker.stop()
-        self.screen_capture.cleanup()
-        self.window_manager.cleanup()
-        
-        self.logger.info("Activity monitoring stopped")
-    
-    def execute(self, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def execute(self) -> Dict[str, Any]:
         """Execute the monitoring agent.
         
         This implementation starts the monitoring process and returns status.
@@ -462,4 +426,4 @@ class MonitorAgent(BaseAgent):
             return {
                 "status": "error",
                 "message": f"Failed to start monitoring: {str(e)}"
-            } 
+            }

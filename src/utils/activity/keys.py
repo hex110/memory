@@ -1,31 +1,3 @@
-"""Keyboard and mouse activity tracking using evdev.
-
-This module provides keyboard and mouse event tracking functionality using
-the evdev library. It captures and categorizes input events while providing
-a flexible way to filter and process them.
-
-Core features:
-- Device discovery and monitoring
-- Event capture and categorization
-- Window-based event tracking
-- Thread-safe event collection
-
-Example:
-    ```python
-    tracker = ActivityTracker()
-    
-    # Optional: Set up event filtering
-    def should_track_event():
-        return True  # Add custom logic here
-    tracker.set_tracking_filter(should_track_event)
-    
-    tracker.start()
-    # ... events are collected ...
-    events = tracker.get_events()
-    tracker.stop()
-    ```
-"""
-
 import asyncio
 import threading
 import logging
@@ -110,11 +82,11 @@ class ActivityTracker:
         """
         now = datetime.now()
         
-        # End current session if exists
+        # End current session if exists and add it to the list of sessions
         if self.current_session:
             self.current_session.end_session(now)
             self.pending_sessions.append(self.current_session)
-        
+
         # Start new session
         self.current_session = WindowSession(window_info, now)
         logger.debug(f"Started new session for {window_info['class']}")
@@ -248,7 +220,7 @@ class ActivityTracker:
             
             # Set up window focus tracking
             self.window_manager.setup_focus_tracking(self._on_window_focus_change)
-            
+
             # Start with current window if any
             current_window = self.window_manager.get_active_window()
             if current_window:
@@ -272,7 +244,6 @@ class ActivityTracker:
             # End current session if exists
             if self.current_session:
                 self.current_session.end_session(datetime.now())
-                self.pending_sessions.append(self.current_session)
                 self.current_session = None
             
             # Cancel all tasks
@@ -302,21 +273,24 @@ class ActivityTracker:
         Returns:
             Dict containing window sessions and event totals
         """
-        # End current session temporarily to get its data
-        current_session_data = None
+        
+        # Get current window info
+        current_window = self.window_manager.get_active_window()
+        
+        # End current session and get the data, if any
+        session_data = None
         if self.current_session:
-            temp_session = WindowSession(
-                self.current_session.window_info,
-                self.current_session.start_time
-            )
-            temp_session.end_session(datetime.now())
-            current_session_data = temp_session.to_dict()
+            self.current_session.end_session(datetime.now())
+            session_data = self.current_session.to_dict()
+            self.current_session = None
         
-        # Collect all session data
-        sessions = [s.to_dict() for s in self.pending_sessions]
-        if current_session_data:
-            sessions.append(current_session_data)
+        sessions = []
         
+        sessions.extend([s.to_dict() for s in self.pending_sessions])
+
+        if session_data:
+            sessions.append(session_data)
+
         events = {
             "window_sessions": sessions,
             "counts": {
@@ -332,5 +306,9 @@ class ActivityTracker:
         self._total_keys = 0
         self._total_clicks = 0
         self._total_scrolls = 0
+
+        # Create new session with the active window
+        if current_window:
+            self._on_window_focus_change(current_window)
         
         return events

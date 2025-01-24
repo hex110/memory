@@ -20,14 +20,14 @@ Example:
     ```
 """
 
+import base64
+from io import BytesIO
 import os
 import logging
 from datetime import datetime
-from pathlib import Path
 from typing import Optional, Dict, Any
 
 import pyscreenshot
-from PIL import Image
 
 from src.utils.exceptions import ScreenCaptureError
 
@@ -65,31 +65,10 @@ class ScreenCapture:
         """Capture current screen state.
         
         Returns:
-            Dict containing screenshot data and metadata, or None if capture fails
-            Format: {
-                "timestamp": ISO format timestamp,
-                "image": PIL Image object,
-                "size": (width, height)
-            }
+            PIL Image object, or None if capture fails
         """
         try:
-            # Attempt to capture screenshot
-            screenshot = pyscreenshot.grab(backend="grim")
-            if not screenshot:
-                logger.warning("Screenshot capture failed - no image data")
-                return None
-            
-            # Create result with metadata
-            result = {
-                "timestamp": datetime.now().isoformat(),
-                "image": screenshot,
-                "size": screenshot.size
-            }
-            
-            logger.debug(
-                f"Screenshot captured successfully: {result['size'][0]}x{result['size'][1]}"
-            )
-            return result
+            return pyscreenshot.grab(backend="grim")
             
         except Exception as e:
             # Don't raise error for expected Wayland failures
@@ -97,6 +76,32 @@ class ScreenCapture:
                 logger.warning("Screenshot capture failed (expected on Wayland)")
             else:
                 logger.error(f"Screenshot capture failed: {e}")
+            return None
+    
+    def capture_and_encode(self) -> Optional[Dict[str, Any]]:
+        """Capture current screen state and encode to base64.
+        
+        Returns:
+            Dict containing encoded screenshot and metadata or None on failure
+            Format: {
+                "timestamp": ISO format timestamp,
+                "image": base64 encoded string,
+                "size": (width, height)
+            }
+        """
+        try:
+            capture_result = self.capture()
+            if not capture_result:
+                return None
+
+            buffer = BytesIO()
+            capture_result.save(buffer, format="PNG")
+            encoded_image = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+            return encoded_image
+            
+        except Exception as e:
+            logger.error(f"Screenshot capture and encode failed: {e}")
             return None
     
     def cleanup(self) -> None:
