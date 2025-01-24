@@ -4,6 +4,7 @@ import os
 import json
 import time
 import logging
+from enum import Enum
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable, Union
 from jinja2 import Environment, FileSystemLoader
@@ -18,10 +19,15 @@ from src.utils.exceptions import (
     APIError, APIConnectionError, APIResponseError,
     APIAuthenticationError
 )
-from src.interfaces.agent import AgentInterface, ToolSchema
+from src.interfaces.agent import AgentInterface
 from src.interfaces.postgresql import DatabaseInterface
 from src.ontology.manager import OntologyManager
-from src.utils.agent_tools import AgentDatabaseTools
+
+class ToolBehavior(Enum):
+    """Controls how tools are used and their outputs handled."""
+    USE_AND_DONE = "use_and_done"  # Use tool and return its output
+    USE_AND_ANALYZE_OUTPUT_AND_DONE = "use_and_analyze_output_and_done"  # Use tool, analyze output, return analysis
+    KEEP_USING_UNTIL_DONE = "keep_using_until_done"  # Keep using tools until task complete
 
 class BaseAgent(AgentInterface):
     """Base class implementing common agent functionality."""
@@ -31,8 +37,7 @@ class BaseAgent(AgentInterface):
         config_path: str,
         prompt_folder: str,
         db_interface: DatabaseInterface,
-        ontology_manager: OntologyManager,
-        role: str
+        ontology_manager: OntologyManager
     ):
         """Initialize the agent.
         
@@ -41,13 +46,12 @@ class BaseAgent(AgentInterface):
             prompt_folder: Path to prompt templates folder
             db_interface: Database interface instance
             ontology_manager: Ontology manager instance
-            role: Agent role for determining available tools
             
         Raises:
             ConfigError: If required config values are missing
         """
         # Set up logging
-        self.logger = logging.getLogger(f"src.agent.{role}_agent")
+        self.logger = logging.getLogger(f"src.agent.{self.__class__.__name__.lower()}")
         
         # Enable JSON schema validation for Gemini
         litellm.enable_json_schema_validation = True
@@ -65,7 +69,6 @@ class BaseAgent(AgentInterface):
         provider = self.config["llm"].get("provider", "gemini").lower()
         if provider == "gemini":
             os.environ["GEMINI_API_KEY"] = provider_config["api_key"]
-            # Add gemini/ prefix for LiteLLM
             self.model = "gemini/gemini-2.0-flash-exp"
             
             # Verify vision support
@@ -78,41 +81,39 @@ class BaseAgent(AgentInterface):
         
         self.env = Environment(loader=FileSystemLoader(prompt_folder))
         
-        # Initialize database tools with role-specific access
-        self.db_tools = AgentDatabaseTools(db_interface, ontology_manager, role)
+        # Initialize tool registry
+        self.tool_registry = {}
+        self.available_tools = []  # List of tool names this agent can use
         
-        # Initialize tool registries
-        self._tools: Dict[str, Callable] = {}
-        self._tool_schemas: List[ToolSchema] = []
+        # Load tool implementations
+        self._load_tool_implementations()
+    
+    def _load_tool_implementations(self):
+        """Load implementations for available tools."""
+        from src.schemas.tools_definitions import get_tool_implementations
         
-        # Register all database tools available for this role
-        for schema in self.db_tools.get_tool_schemas():
-            self.register_tool(
-                schema["name"],
-                getattr(self.db_tools, schema["name"]),
-                schema
-            )
-    
-    @property
-    def available_tools(self) -> Dict[str, Callable]:
-        """Get available tools. Override in subclass to add tools."""
-        return self._tools
-    
-    @property
-    def tool_schemas(self) -> List[ToolSchema]:
-        """Get tool schemas. Override in subclass to add schemas."""
-        return self._tool_schemas
-    
-    def register_tool(self, name: str, func: Callable, schema: ToolSchema) -> None:
-        """Register a new tool.
+        implementations = get_tool_implementations(self.available_tools)
+        class_instances = {}  # Cache for class instances
         
-        Args:
-            name: Name of the tool
-            func: The tool's implementation
-            schema: The tool's schema
-        """
-        self._tools[name] = func
-        self._tool_schemas.append(schema)
+        for tool_name, tool_def in implementations.items():
+            module_name, func_name = tool_def.implementation.split(".")
+            module_path = f"src.agent.tools.tl_{module_name}"
+            
+            if tool_def.implementation_type == "function":
+                # Load function directly from module
+                module = __import__(module_path, fromlist=[func_name])
+                self.tool_registry[tool_name] = getattr(module, func_name)
+                
+            elif tool_def.implementation_type == "method":
+                # Load method from class instance
+                if module_path not in class_instances:
+                    module = __import__(module_path, fromlist=[tool_def.class_name])
+                    class_ = getattr(module, tool_def.class_name)
+                    # Initialize class with any required dependencies
+                    class_instances[module_path] = class_(self.db_interface)
+                    
+                instance = class_instances[module_path]
+                self.tool_registry[tool_name] = getattr(instance, func_name)
     
     def load_prompt(self, prompt_name: str, context: Dict[str, Any]) -> str:
         """Load and render a prompt template."""
@@ -124,36 +125,35 @@ class BaseAgent(AgentInterface):
         prompt: Union[str, List[Dict[str, Any]]],
         temperature: float = 0.7,
         system_prompt: Optional[str] = None,
+        tool_behavior: ToolBehavior = ToolBehavior.USE_AND_ANALYZE_OUTPUT_AND_DONE,
         **kwargs
     ) -> str:
-        """Call the LLM API with retries and tool support."""
+        """Call the LLM API with tools support and specified behavior.
+        
+        Args:
+            prompt: The prompt or message list
+            temperature: Sampling temperature
+            system_prompt: Optional system prompt
+            tool_behavior: How to handle tool usage and outputs
+            **kwargs: Additional arguments for the LLM
+            
+        Returns:
+            The LLM's response or tool output based on tool_behavior
+        """
         try:
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
             
-            # Handle both string prompts and structured content
             if isinstance(prompt, str):
                 messages.append({"role": "user", "content": prompt})
             else:
-                # If prompt is a list, it's structured content
-                messages.append({"role": "user", "content": prompt})
+                messages.extend(prompt)
             
-            # Configure function calling
-            if self.tool_schemas:
-                # Format tools according to Gemini's spec
-                tools = []
-                for schema in self.tool_schemas:
-                    tools.append({
-                        "type": "function",
-                        "function": {
-                            "name": schema["name"],
-                            "description": schema.get("description", ""),
-                            "parameters": schema["parameters"]
-                        }
-                    })
-                
-                # Set up tool configuration for Gemini
+            # Configure function calling if agent has tools
+            if self.available_tools:
+                from src.schemas.tools_definitions import get_tool_schemas
+                tools = get_tool_schemas(self.available_tools)
                 kwargs["tools"] = tools
                 kwargs["tool_config"] = {
                     "function_calling_config": {
@@ -168,10 +168,16 @@ class BaseAgent(AgentInterface):
                 **kwargs
             )
             
-            # Handle tool calls if present
             message = response.choices[0].message
+            
+            # Handle tool calls if present
             if message.tool_calls and self.available_tools:
-                return self._handle_tool_calls(message, messages)
+                return self._handle_tool_calls(
+                    message=message,
+                    messages=messages,
+                    tool_behavior=tool_behavior,
+                    kwargs=kwargs
+                )
             
             return message.content or ""
             
@@ -181,18 +187,21 @@ class BaseAgent(AgentInterface):
     def _handle_tool_calls(
         self,
         message: Dict[str, Any],
-        messages: List[Dict[str, Any]]
+        messages: List[Dict[str, Any]],
+        tool_behavior: ToolBehavior,
+        kwargs: Dict[str, Any]
     ) -> str:
-        """Handle tool calls from the LLM.
+        """Handle tool calls based on specified behavior.
         
         Args:
-            message: The message containing the tool calls
-            messages: The current message history
+            message: The message containing tool calls
+            messages: Current message history
+            tool_behavior: How to handle tool usage
+            kwargs: Additional LLM arguments
             
         Returns:
-            str: The final response after tool calling
+            Response based on tool behavior
         """
-        # Add assistant's message with tool calls
         messages.append({
             "role": "assistant",
             "content": message.get("content"),
@@ -204,14 +213,12 @@ class BaseAgent(AgentInterface):
         for tool_call in message.tool_calls:
             try:
                 func_name = tool_call.function.name
-                # Use json-repair to handle malformed JSON
                 func_args = json.loads(repair_json(tool_call.function.arguments))
                 
-                # Call the function
-                function = self.available_tools[func_name]
+                # Get and call the tool implementation
+                function = self.tool_registry[func_name]
                 function_response = function(**func_args)
                 
-                # Add tool response to messages
                 tool_response = {
                     "role": "tool",
                     "name": func_name,
@@ -222,7 +229,7 @@ class BaseAgent(AgentInterface):
                 tool_responses.append(function_response)
                 
             except Exception as e:
-                print(f"Error handling tool call: {str(e)}")
+                self.logger.error(f"Tool call failed: {str(e)}", exc_info=True)
                 error_response = {
                     "role": "tool",
                     "name": func_name if 'func_name' in locals() else "unknown",
@@ -232,17 +239,37 @@ class BaseAgent(AgentInterface):
                 messages.append(error_response)
                 tool_responses.append({"error": str(e)})
         
-        # If only one tool call, return its response directly
-        if len(tool_responses) == 1:
-            return json.dumps(tool_responses[0])
+        if tool_behavior == ToolBehavior.USE_AND_DONE:
+            # Return the tool output directly
+            return json.dumps(tool_responses[0] if len(tool_responses) == 1 else tool_responses)
         
-        # Get final response from LLM for multiple tool calls
-        response = completion(
-            model=self.model,
-            messages=messages
-        )
+        elif tool_behavior == ToolBehavior.USE_AND_ANALYZE_OUTPUT_AND_DONE:
+            # Get LLM analysis of the tool output
+            response = completion(
+                model=self.model,
+                messages=messages
+            )
+            return response.choices[0].message.content or ""
         
-        return response.choices[0].message.content or ""
+        else:  # KEEP_USING_UNTIL_DONE
+            # Let LLM decide if it needs more tool calls
+            response = completion(
+                model=self.model,
+                messages=messages,
+                tools=kwargs.get("tools")  # Keep tools available
+            )
+            
+            next_message = response.choices[0].message
+            if next_message.tool_calls:
+                # Recursive call for chained tool usage
+                return self._handle_tool_calls(
+                    message=next_message,
+                    messages=messages,
+                    tool_behavior=tool_behavior,
+                    kwargs=kwargs
+                )
+            
+            return next_message.content or ""
     
     def validate_function_response(self, response: str, model_class: Any) -> Any:
         """Validate and parse a function response using a Pydantic model.
@@ -258,15 +285,11 @@ class BaseAgent(AgentInterface):
             ValueError: If validation fails
         """
         try:
-            # Use json-repair to fix potentially malformed JSON
             if isinstance(response, str):
                 data = json.loads(repair_json(response))
             else:
                 data = response
-                
-            # Validate with Pydantic
             return model_class.model_validate(data)
-            
         except Exception as e:
             raise ValueError(f"Failed to validate function response: {str(e)}")
     
@@ -282,4 +305,4 @@ class BaseAgent(AgentInterface):
         
         This can be overridden by subclasses for specific parsing.
         """
-        return response 
+        return response
