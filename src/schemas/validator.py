@@ -115,53 +115,6 @@ class SchemaValidator:
             "required": ["concepts", "relationships", "data_types"]
         }
 
-    def _convert_type(self, value: Any, field_type: str) -> Any:
-        """Convert a value to the appropriate Python type.
-        
-        Args:
-            value: Value to convert
-            field_type: Target type name
-            
-        Returns:
-            Converted value
-            
-        Raises:
-            ValidationError: If conversion fails
-        """
-        if value is None:
-            return None
-            
-        # Handle array types
-        if field_type.endswith("[]"):
-            base_type = field_type[:-2]
-            if not isinstance(value, list):
-                value = [value]
-            return [self._convert_type(item, base_type) for item in value]
-            
-        pg_type = self.PG_TYPES.get(field_type)
-        if not pg_type:
-            return value
-            
-        try:
-            if field_type == "uuid":
-                return uuid.UUID(str(value))
-            elif field_type == "timestamp with time zone":
-                if isinstance(value, str):
-                    return datetime.fromisoformat(value)
-                return value
-            elif field_type == "jsonb":
-                if isinstance(value, str):
-                    return json.loads(value)
-                return value
-            elif isinstance(pg_type, tuple):
-                if not isinstance(value, pg_type):
-                    raise ValidationError(f"Expected {pg_type}, got {type(value)}")
-                return value
-            else:
-                return pg_type(value)
-        except (ValueError, TypeError) as e:
-            raise ValidationError(f"Failed to convert {value} to {field_type}: {str(e)}")
-
     def validate_database_schema(self, schema: Dict[str, Any]) -> None:
         """Validate a database schema definition.
         
@@ -257,9 +210,25 @@ class SchemaValidator:
                 field_type = field_def["type"]
                 if field_type.endswith("[]"):
                     field_schema["type"] = "array"
-                    field_schema["items"] = {"type": "string"}  # Base validation, detailed check later
+                    base_type = field_type[:-2]
+                    if base_type == "uuid":
+                        field_schema["items"] = {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                        }
+                    else:
+                        field_schema["items"] = {"type": "string"}  # Base validation, detailed check later
                 elif field_type == "jsonb":
                     field_schema["type"] = ["object", "array"]
+                elif field_type == "timestamp with time zone":
+                    # Accept any type that could be a valid timestamp
+                    field_schema["type"] = ["string", "object", "null"]
+                    # Remove any type checking here - let the database handle it
+                    if field_name in data:
+                        value = data[field_name]
+                        if isinstance(value, datetime):
+                            # Convert datetime to ISO string for consistency
+                            data[field_name] = value.isoformat()
                 else:
                     field_schema["type"] = ["string", "number", "boolean", "null"]
                 
@@ -279,20 +248,6 @@ class SchemaValidator:
             
             # Validate basic structure
             jsonschema.validate(data, json_schema)
-            
-            # Detailed type validation and conversion
-            for field_name, field_def in schema["properties"].items():
-                if field_name in data:
-                    # Convert and validate type
-                    converted_value = self._convert_type(data[field_name], field_def["type"])
-                    data[field_name] = converted_value
-                    
-                    # Check foreign key constraints
-                    if "foreign_key" in field_def:
-                        ref = field_def["foreign_key"]
-                        ref_table = self.database_schema[ref["table"]]
-                        ref_field = ref_table["properties"][ref["column"]]
-                        self._convert_type(converted_value, ref_field["type"])
             
         except jsonschema.exceptions.ValidationError as e:
             raise ValidationError(f"Invalid data: {e.message}")

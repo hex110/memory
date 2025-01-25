@@ -6,6 +6,8 @@ Duration: {{duration}} seconds
 Window Activity:
 {{window_summaries}}
 
+Note: Some windows may be marked as "privacy filtered" - this indicates activity was tracked but specific interactions were hidden for privacy.
+
 Interaction Metrics:
 - Keys: {{total_keys}}
 - Clicks: {{total_clicks}}

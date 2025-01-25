@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable, Union
 from jinja2 import Environment, FileSystemLoader
 
-import litellm
-from litellm import completion
+from google import genai
+from google.genai import types
 from json_repair import repair_json
 from src.utils.config import (
     load_config, get_provider_config, ConfigError
@@ -53,9 +53,6 @@ class BaseAgent(AgentInterface):
         # Set up logging
         self.logger = logging.getLogger(f"src.agent.{self.__class__.__name__.lower()}")
         
-        # Enable JSON schema validation for Gemini
-        litellm.enable_json_schema_validation = True
-        
         self.config = load_config(config_path)
         
         # Validate required config
@@ -64,23 +61,15 @@ class BaseAgent(AgentInterface):
         
         # Get provider-specific configuration
         provider_config = get_provider_config(self.config)
-        
-        # Set up environment variables for LiteLLM
-        provider = self.config["llm"].get("provider", "gemini").lower()
-        if provider == "gemini":
-            os.environ["GEMINI_API_KEY"] = provider_config["api_key"]
-            self.model = "gemini/gemini-2.0-flash-exp"
-            
-            # Verify vision support
-            if not litellm.supports_vision(self.model):
-                raise ConfigError(f"Model {self.model} does not support vision")
-        else:
-            # For OpenRouter
-            os.environ["OPENROUTER_API_KEY"] = provider_config["api_key"]
-            self.model = provider_config["model"]
+
+        self.client = genai.Client(api_key=provider_config["api_key"])
+        self.model = "gemini-2.0-flash-exp"
         
         self.env = Environment(loader=FileSystemLoader(prompt_folder))
         
+        self.db_interface = db_interface
+        self.ontology_manager = ontology_manager
+
         # Initialize tool registry
         self.tool_registry = {}
         self.available_tools = []  # List of tool names this agent can use
@@ -126,150 +115,128 @@ class BaseAgent(AgentInterface):
         temperature: float = 0.7,
         system_prompt: Optional[str] = None,
         tool_behavior: ToolBehavior = ToolBehavior.USE_AND_ANALYZE_OUTPUT_AND_DONE,
+        specific_tools: Optional[List[str]] = None,  # Add this parameter
         **kwargs
     ) -> str:
-        """Call the LLM API with tools support and specified behavior.
-        
-        Args:
-            prompt: The prompt or message list
-            temperature: Sampling temperature
-            system_prompt: Optional system prompt
-            tool_behavior: How to handle tool usage and outputs
-            **kwargs: Additional arguments for the LLM
-            
-        Returns:
-            The LLM's response or tool output based on tool_behavior
-        """
         try:
             messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
             
             if isinstance(prompt, str):
                 messages.append({"role": "user", "content": prompt})
             else:
                 messages.extend(prompt)
+                
+            # Convert messages to Gemini format
+            contents = [{"role": m["role"], "parts": [{"text": m["content"]}]} for m in messages]
             
-            # Configure function calling if agent has tools
-            if self.available_tools:
-                from src.schemas.tools_definitions import get_tool_schemas
-                tools = get_tool_schemas(self.available_tools)
-                kwargs["tools"] = tools
-                kwargs["tool_config"] = {
-                    "function_calling_config": {
-                        "mode": "ANY"  # Force function calling
-                    }
-                }
+            # Configure tools - either use specific_tools or self.available_tools
+            tools = None
+            if specific_tools or self.available_tools:
+                from src.schemas.tools_definitions import get_tool_declarations
+                tools = get_tool_declarations(specific_tools or self.available_tools)
             
-            response = completion(
+            # Remove tool-related kwargs
+            config_kwargs = {k: v for k, v in kwargs.items() 
+                           if k not in ['tools', 'tool_config', 'function_call']}
+            
+            response = self.client.models.generate_content(
                 model=self.model,
-                messages=messages,
-                temperature=temperature,
-                **kwargs
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    temperature=temperature,
+                    system_instruction=system_prompt if system_prompt else None,
+                    tools=tools,
+                    **config_kwargs
+                )
             )
             
-            message = response.choices[0].message
-            
-            # Handle tool calls if present
-            if message.tool_calls and self.available_tools:
+            # Check for function calls
+            if hasattr(response, 'candidates') and response.candidates[0].content.parts[0].function_call:
                 return self._handle_tool_calls(
-                    message=message,
+                    message=response.candidates[0].content,
                     messages=messages,
                     tool_behavior=tool_behavior,
                     kwargs=kwargs
                 )
-            
-            return message.content or ""
+                
+            return response.text
             
         except Exception as e:
             raise APIResponseError(f"Error calling LLM: {str(e)}") from e
     
     def _handle_tool_calls(
         self,
-        message: Dict[str, Any],
+        message: Any,
         messages: List[Dict[str, Any]],
         tool_behavior: ToolBehavior,
         kwargs: Dict[str, Any]
     ) -> str:
-        """Handle tool calls based on specified behavior.
+        # Extract the function call details
+        function_call = message.parts[0].function_call
         
-        Args:
-            message: The message containing tool calls
-            messages: Current message history
-            tool_behavior: How to handle tool usage
-            kwargs: Additional LLM arguments
-            
-        Returns:
-            Response based on tool behavior
-        """
+        # Add assistant message with function call to message history
         messages.append({
             "role": "assistant",
-            "content": message.get("content"),
-            "tool_calls": message.tool_calls
+            "content": message.parts[0].text if hasattr(message.parts[0], 'text') else None,
+            "function_call": {
+                "name": function_call.name,
+                "arguments": function_call.args
+            }
         })
         
-        # Handle each tool call
-        tool_responses = []
-        for tool_call in message.tool_calls:
-            try:
-                func_name = tool_call.function.name
-                func_args = json.loads(repair_json(tool_call.function.arguments))
-                
-                # Get and call the tool implementation
-                function = self.tool_registry[func_name]
-                function_response = function(**func_args)
-                
-                tool_response = {
-                    "role": "tool",
-                    "name": func_name,
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps(function_response)
-                }
-                messages.append(tool_response)
-                tool_responses.append(function_response)
-                
-            except Exception as e:
-                self.logger.error(f"Tool call failed: {str(e)}", exc_info=True)
-                error_response = {
-                    "role": "tool",
-                    "name": func_name if 'func_name' in locals() else "unknown",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps({"error": str(e)})
-                }
-                messages.append(error_response)
-                tool_responses.append({"error": str(e)})
-        
-        if tool_behavior == ToolBehavior.USE_AND_DONE:
-            # Return the tool output directly
-            return json.dumps(tool_responses[0] if len(tool_responses) == 1 else tool_responses)
-        
-        elif tool_behavior == ToolBehavior.USE_AND_ANALYZE_OUTPUT_AND_DONE:
-            # Get LLM analysis of the tool output
-            response = completion(
-                model=self.model,
-                messages=messages
-            )
-            return response.choices[0].message.content or ""
-        
-        else:  # KEEP_USING_UNTIL_DONE
-            # Let LLM decide if it needs more tool calls
-            response = completion(
-                model=self.model,
-                messages=messages,
-                tools=kwargs.get("tools")  # Keep tools available
-            )
+        try:
+            # Get and call the tool implementation
+            function = self.tool_registry[function_call.name]
+            function_response = function(**function_call.args)
             
-            next_message = response.choices[0].message
-            if next_message.tool_calls:
-                # Recursive call for chained tool usage
-                return self._handle_tool_calls(
-                    message=next_message,
-                    messages=messages,
-                    tool_behavior=tool_behavior,
-                    kwargs=kwargs
+            # Convert function response to string if needed
+            if not isinstance(function_response, str):
+                function_response = json.dumps(function_response)
+                
+            # Create tool response content
+            function_response_part = types.Part.from_function_response(
+                name=function_call.name,
+                response={"result": function_response}
+            )
+            tool_content = types.Content(role="tool", parts=[function_response_part])
+            
+            if tool_behavior == ToolBehavior.USE_AND_DONE:
+                return function_response
+                
+            # Add tool response to messages and convert all to Gemini format
+            messages.append({"role": "tool", "content": function_response})
+            contents = [{"role": m["role"], "parts": [{"text": m["content"]}]} for m in messages]
+            
+            if tool_behavior == ToolBehavior.USE_AND_ANALYZE_OUTPUT_AND_DONE:
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=contents
                 )
-            
-            return next_message.content or ""
+                return response.text
+                
+            else:  # KEEP_USING_UNTIL_DONE
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        tools=kwargs.get("tools")
+                    )
+                )
+                
+                # Check if there's another function call
+                if hasattr(response.candidates[0].content.parts[0], 'function_call'):
+                    return self._handle_tool_calls(
+                        message=response.candidates[0].content,
+                        messages=messages,
+                        tool_behavior=tool_behavior,
+                        kwargs=kwargs
+                    )
+                    
+                return response.text
+                
+        except Exception as e:
+            self.logger.error(f"Tool call failed: {str(e)}", exc_info=True)
+            return json.dumps({"error": str(e)})
     
     def validate_function_response(self, response: str, model_class: Any) -> Any:
         """Validate and parse a function response using a Pydantic model.

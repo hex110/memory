@@ -1,27 +1,18 @@
 """Window tracking functionality.
 
-This module provides window tracking capabilities for different window managers.
-The base WindowManagerInterface allows for easy addition of new window managers,
-while the HyprlandManager provides specific implementation for Hyprland.
+This module provides window tracking capabilities through the WindowManager class.
+Currently implements Hyprland-specific window management, with architecture
+supporting future window manager implementations.
 
 Core features:
-- Abstract interface for window managers
+- Window state tracking
 - Focus history tracking
 - Window metadata parsing
 - Window classification
 - Error recovery
-
-Example:
-    ```python
-    tracker = WindowTracker()
-    
-    # Get current window state
-    window_data = tracker.get_window_state()
-    if window_data:
-        print(f"Active windows: {len(window_data['windows'])}")
-    ```
 """
 
+import json
 import subprocess
 import logging
 import os
@@ -29,47 +20,16 @@ import socket
 import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Callable
-from abc import ABC, abstractmethod
 
 from src.utils.exceptions import WindowTrackingError
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
-class WindowManagerInterface(ABC):
-    """Abstract interface for window manager implementations.
+class WindowManager:
+    """Window manager implementation for tracking and managing window state."""
     
-    This interface defines the required methods that any window manager
-    implementation must provide for window tracking functionality.
-    """
-    
-    @abstractmethod
-    def get_active_window(self) -> Optional[Dict[str, str]]:
-        """Get currently focused window info.
-        
-        Returns:
-            Dict with window info (class, title) or None if no active window
-        """
-        pass
-    
-    @abstractmethod
-    def setup_focus_tracking(self, callback: Callable[[Dict[str, str]], None]) -> None:
-        """Set up focus change tracking.
-        
-        Args:
-            callback: Function to call when window focus changes
-        """
-        pass
-    
-    @abstractmethod
-    def cleanup(self) -> None:
-        """Clean up any resources used by the window manager."""
-        pass
-
-class HyprlandManager(WindowManagerInterface):
-    """Hyprland-specific window manager implementation."""
-    
-    # Window classification mappings
+    # Keeping the existing window classification mappings
     WINDOW_CLASS_MAPPINGS = {
         # IDEs and editors
         ("cursor", "codium", "code"): "VSCode - IDE",
@@ -100,12 +60,14 @@ class HyprlandManager(WindowManagerInterface):
     }
     
     def __init__(self) -> None:
-        """Initialize Hyprland window manager interface."""
+        """Initialize window manager interface."""
         self.windows: List[Dict[str, Any]] = []
         self.socket_thread: Optional[threading.Thread] = None
         self.running = False
         self._focus_callback: Optional[Callable[[Dict[str, str]], None]] = None
-        logger.debug("HyprlandManager initialized")
+        self.update_active_workspaces()
+        self.update_windows()  # Initial window state
+        logger.debug("WindowManager initialized")
     
     def _get_window_class_name(self, window_class: str) -> str:
         """Get the classified window name based on the window class."""
@@ -123,21 +85,85 @@ class HyprlandManager(WindowManagerInterface):
         logger.debug(f"No classification found for {window_class}")
         return window_class.title()
     
+    def update_active_workspaces(self) -> None:
+        """Update the set of active workspaces across all monitors."""
+        try:
+            result = subprocess.run(
+                ["hyprctl", "monitors", "-j"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            monitors = json.loads(result.stdout)
+            
+            new_active_workspaces = set()
+            for monitor in monitors:
+                workspace_id = monitor.get('activeWorkspace', {}).get('id')
+                if workspace_id is not None:
+                    new_active_workspaces.add(workspace_id)
+            
+            self.active_workspaces = new_active_workspaces
+            logger.debug(f"Active workspaces updated: {self.active_workspaces}")
+            
+        except subprocess.CalledProcessError:
+            logger.error("Failed to execute hyprctl monitors")
+        except Exception as e:
+            logger.error(f"Failed to update active workspaces: {e}")
+
+    def update_windows(self) -> None:
+        """Update the current window state."""
+        try:
+            result = subprocess.run(
+                ["hyprctl", "clients", "-j"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            window_list = json.loads(result.stdout)
+            self.windows = []  # Clear existing windows
+            
+            for window_info in window_list:
+                # Get workspace ID, handling both dictionary and direct integer cases
+                workspace = window_info.get('workspace', {})
+                workspace_id = workspace.get('id') if isinstance(workspace, dict) else workspace
+                
+                window_data = {
+                    'class': self._get_window_class_name(window_info.get('class', '')),
+                    'title': window_info.get('title', ''),
+                    'original_class': window_info.get('class', ''),
+                    'position': window_info.get('at', [0, 0]),
+                    'size': window_info.get('size', [0, 0]),
+                    'workspace': workspace_id,
+                    'visible': workspace_id in self.active_workspaces
+                }
+                self.windows.append(window_data)
+                    
+        except subprocess.CalledProcessError:
+            logger.error("Failed to execute hyprctl clients")
+        except Exception as e:
+            logger.error(f"Failed to update windows: {e}")
+    
+    def get_windows(self) -> List[Dict[str, Any]]:
+        """Get current window state.
+        
+        Returns:
+            List of dictionaries containing window information
+        """
+        return self.windows
+    
+    # Keeping all existing methods unchanged
     def setup_focus_tracking(self, callback: Callable[[Dict[str, str]], None]) -> None:
         """Set up focus change tracking using Hyprland's IPC socket."""
         self._focus_callback = callback
         try:
-            # Get Hyprland instance signature
             his = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
             if not his:
                 logger.error("HYPRLAND_INSTANCE_SIGNATURE not found in environment")
                 return
 
-            # Construct socket path
             runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "/run/user/1000")
             self.socket_path = f"{runtime_dir}/hypr/{his}/.socket2.sock"
             
-            # Start socket listening thread
             self.running = True
             self.socket_thread = threading.Thread(target=self._listen_for_events)
             self.socket_thread.daemon = True
@@ -160,7 +186,6 @@ class HyprlandManager(WindowManagerInterface):
                     
                 for line in data.strip().split('\n'):
                     if line.startswith('activewindow>>'):
-                        # Format: activewindow>>WINDOWCLASS,WINDOWTITLE
                         _, window_info = line.split('>>', 1)
                         window_class, window_title = window_info.split(',', 1)
                         class_name = self._get_window_class_name(window_class)
@@ -171,6 +196,17 @@ class HyprlandManager(WindowManagerInterface):
                                 "title": window_title,
                                 "original_class": window_class
                             })
+                        self.update_active_workspaces()  # Update workspace state
+                        self.update_windows()  # Update window state
+                    # Add workspace change event handling
+                    elif any(line.startswith(event) for event in [
+                        'workspace>>', 'workspacev2>>', 
+                        'moveworkspace>>', 'moveworkspacev2>>',
+                        'createworkspace>>', 'createworkspacev2>>',
+                        'destroyworkspace>>', 'destroyworkspacev2>>'
+                    ]):
+                        self.update_active_workspaces()
+                        self.update_windows()
                         
         except Exception as e:
             logger.error(f"IPC socket error: {e}")
@@ -181,7 +217,6 @@ class HyprlandManager(WindowManagerInterface):
     def get_active_window(self) -> Optional[Dict[str, str]]:
         """Get currently focused window info."""
         try:
-            # Capture current window state
             result = subprocess.run(
                 ["hyprctl", "activewindow"],
                 capture_output=True,
@@ -189,7 +224,6 @@ class HyprlandManager(WindowManagerInterface):
                 check=True
             )
             
-            # Parse the output
             window_class = ""
             window_title = ""
             
@@ -226,4 +260,4 @@ class HyprlandManager(WindowManagerInterface):
         self.running = False
         if self.socket_thread:
             self.socket_thread.join(timeout=1.0)
-        logger.debug("HyprlandManager cleaned up")
+        logger.debug("WindowManager cleaned up")

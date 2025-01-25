@@ -1,0 +1,7 @@
+{
+    "always_private": [
+        "signal",
+        "telegram"
+    ],
+    "current_private": []
+}

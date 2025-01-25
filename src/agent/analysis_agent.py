@@ -21,21 +21,20 @@ class AnalysisAgent(BaseAgent):
         ontology_manager: OntologyManager,
         session_id: str
     ):
-        """Initialize the analysis agent.
-        
-        Args:
-            config_path: Path to config file
-            prompt_folder: Path to prompt templates folder
-            db_interface: Database interface instance
-            ontology_manager: Ontology manager instance
-        """
         super().__init__(
             config_path=config_path,
             prompt_folder=prompt_folder,
             db_interface=db_interface,
-            ontology_manager=ontology_manager,
-            role="analysis",
+            ontology_manager=ontology_manager
         )
+
+        # Set available tools for this agent
+        # self.available_tools = [
+        #     "database.query_entities",
+        #     "database.add_entity",
+        #     "database.update_entity"
+        # ]
+        self.available_tools = []
 
         self.session_id = session_id
         self.event_system = ActivityEventSystem()
@@ -50,7 +49,6 @@ class AnalysisAgent(BaseAgent):
         if not self.is_running:
             self.is_running = True
             self._subscribe_to_events()
-
             self.logger.info("Analysis started")
     
     def stop_analysis_cycles(self):
@@ -123,73 +121,53 @@ class AnalysisAgent(BaseAgent):
             self.logger.error(f"Error handling analysis interval event: {e}")
 
     def _get_recent_raw_data(self, start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
-        """Get raw activity data for a time period.
-        
-        Args:
-            start_time: Start of the time period
-            end_time: End of the time period
-            
-        Returns:
-            List of raw activity data records
-        """
+        """Get raw activity data for a time period."""
         query = {
-            "timestamp": {
+            "created_at": {
                 ">=": start_time.isoformat(),
                 "<=": end_time.isoformat()
             }
         }
         
-        raw_data = self.db_tools.query_entities(
+        raw_data = self.db_interface.query_entities(
             "activity_raw",
             query,
-            sort_by="timestamp",
+            sort_by="created_at",
             sort_order="asc"
         )
         
-        # Parse JSON strings in window_sessions
+        # Ensure window_sessions is a list
         for record in raw_data:
             if "window_sessions" in record:
-                try:
-                    if isinstance(record["window_sessions"], str):
+                if isinstance(record["window_sessions"], str):
+                    try:
                         record["window_sessions"] = json.loads(record["window_sessions"])
-                    elif not isinstance(record["window_sessions"], list):
+                    except json.JSONDecodeError:
+                        self.logger.error(f"Failed to parse window sessions for record {record['id']}")
                         record["window_sessions"] = []
-                except json.JSONDecodeError:
-                    self.logger.error(f"Failed to parse window sessions for record {record['id']}")
+                elif record["window_sessions"] is None:
                     record["window_sessions"] = []
+        
         return raw_data
 
     def _get_recent_analyses(
         self, 
         end_time: datetime, 
-        start_time: Optional[datetime] = None,
         limit: Optional[int] = None,
         analysis_type: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """Get recent analyses for a time period.
-        
-        Args:
-            end_time: End of the time period
-            start_time: Start of the time period (optional)
-            limit: Maximum number of records to return (optional)
-            analysis_type: Type of analysis to filter by (optional)
-                
-        Returns:
-            List of analysis records
-        """
+        """Get recent analyses for a time period."""
         query = {
+            "session_id": self.session_id,
             "start_timestamp": {
                 "<=": end_time.isoformat()
             }
         }
         
-        if start_time:
-            query["start_timestamp"][">="] = start_time.isoformat()
-        
         if analysis_type:
             query["analysis_type"] = analysis_type
-        
-        return self.db_tools.query_entities(
+            
+        return self.db_interface.query_entities(
             "activity_analysis",
             query,
             sort_by="start_timestamp",
@@ -198,14 +176,7 @@ class AnalysisAgent(BaseAgent):
         )
 
     def _format_window_summaries(self, window_sessions: List[Dict[str, Any]]) -> str:
-        """Format window summaries for analysis.
-
-        Args:
-            window_sessions: List of window sessions
-
-        Returns:
-            Formatted window summaries
-        """
+        """Format window summaries for analysis."""
         summary_parts = []
         merged_sessions = []
         last_session = None
@@ -239,25 +210,29 @@ class AnalysisAgent(BaseAgent):
             click_count = session.get('click_count', 0)
             scroll_count = session.get('scroll_count', 0)
 
-            actions = []
-            if key_count > 0:
-                typed_chars = "".join(
-                    [event['key'] for event in session.get('key_events', []) if event['type'] == 'press']
-                )
-                actions.append(f"typed '{typed_chars}'")
-            if click_count > 0:
-                actions.append(f"clicked {click_count} time{'s' if click_count > 1 else ''}")
-            if scroll_count > 0:
-                actions.append(f"scrolled {scroll_count} time{'s' if scroll_count > 1 else ''}")
-
-            action_string = ""
-            if actions:
-                if len(actions) == 1:
-                    action_string = actions[0]
-                elif len(actions) > 1:
-                    action_string = ", and ".join([", ".join(actions[:-1]), actions[-1]])
+            if session.get('privacy_filtered'):
+                action_string = "this activity was filtered for privacy"
             else:
-                action_string = "did nothing"
+
+                actions = []
+                if key_count > 0:
+                    typed_chars = "".join(
+                        [event['key'] for event in session.get('key_events', []) if event['type'] == 'press']
+                    )
+                    actions.append(f"typed '{typed_chars}'")
+                if click_count > 0:
+                    actions.append(f"clicked {click_count} time{'s' if click_count > 1 else ''}")
+                if scroll_count > 0:
+                    actions.append(f"scrolled {scroll_count} time{'s' if scroll_count > 1 else ''}")
+
+                action_string = ""
+                if actions:
+                    if len(actions) == 1:
+                        action_string = actions[0]
+                    elif len(actions) > 1:
+                        action_string = ", and ".join([", ".join(actions[:-1]), actions[-1]])
+                else:
+                    action_string = "did nothing"
 
             if i == 0:
                 summary_parts.append(f"The user was on window class '{window_class}' with title '{window_title}' for {duration:.1f} seconds and {action_string}.")
@@ -265,6 +240,42 @@ class AnalysisAgent(BaseAgent):
                 summary_parts.append(f"The user switched to window class '{window_class}' with title '{window_title}' for {duration:.1f} seconds and {action_string}.")
 
         return " ".join(summary_parts).replace("  "," ")
+
+    def _store_analysis(self, analysis_data: Dict[str, Any], analysis_type: str):
+        """Store analysis results in the database."""
+        if not analysis_data:
+            return
+        
+        try:
+            # Convert UUID objects to strings
+            source_ids = [str(uuid_obj) for uuid_obj in analysis_data["source_ids"]]
+
+            storage_data = {
+                "session_id": self.session_id,
+                "start_timestamp": analysis_data["start_time"],
+                "end_timestamp": analysis_data["end_time"],
+                "analysis_type": analysis_type,
+                "source_activities": source_ids,
+                "llm_response": analysis_data["analysis"],
+                "created_by": "agent"
+            }
+
+            try:
+                self.db_interface.add_entity(
+                    "activity_analysis",
+                    storage_data
+                )
+            except Exception as e:
+                if "duplicate key" in str(e):
+                    storage_data["updated_by"] = "agent"
+                    self.db_interface.update_entity(
+                        "activity_analysis",
+                        storage_data
+                    )
+                else:
+                    raise
+        except Exception as e:
+            self.logger.error(f"Failed to store analysis: {e}")
 
     def _analyze_short_term(self, raw_data: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Analyze 30 seconds of activity data.
@@ -279,13 +290,13 @@ class AnalysisAgent(BaseAgent):
             return None
             
         # Prepare data for analysis
-        start_time = raw_data[0]["timestamp"]
-        end_time = raw_data[-1]["timestamp"]
-        source_ids = [record["id"] for record in raw_data]
+        start_time = raw_data[0]["created_at"]
+        end_time = raw_data[-1]["created_at"]
+        source_ids = [str(record["id"]) for record in raw_data]
         
         # Get recent analyses
         recent_logs = self._get_recent_analyses(
-            end_time=datetime.fromisoformat(start_time),
+            end_time=start_time,
             limit=3
         )
 
@@ -300,6 +311,11 @@ class AnalysisAgent(BaseAgent):
             total_keys += record["total_keys_pressed"]
             total_clicks += record["total_clicks"]
             total_scrolls += record["total_scrolls"]
+
+        if raw_data[0]["screenshot"]:
+            screenshot_available = True
+        else:
+            screenshot_available = False
         
         context = {
             "window_summaries": self._format_window_summaries(window_sessions),
@@ -307,7 +323,8 @@ class AnalysisAgent(BaseAgent):
             "total_clicks": total_clicks,
             "total_scrolls": total_scrolls,
             "duration": self.collection_interval,
-            "previous_logs": [log["llm_response"] for log in recent_logs] if recent_logs else None
+            "previous_logs": [log["llm_response"] for log in recent_logs] if recent_logs else None,
+            "screenshot_available": screenshot_available
         }
         
         # Get LLM analysis
@@ -343,12 +360,12 @@ class AnalysisAgent(BaseAgent):
         if not raw_data:
             return None
             
-        start_time = raw_data[0]["timestamp"]
-        end_time = raw_data[-1]["timestamp"]
-        source_ids = [record["id"] for record in raw_data]
+        start_time = raw_data[0]["created_at"]
+        end_time = raw_data[-1]["created_at"]
+        source_ids = [str(record["id"]) for record in raw_data]
 
         recent_logs = self._get_recent_analyses(
-            end_time=datetime.fromisoformat(start_time),
+            end_time=start_time,
             limit=10
         )
         
@@ -382,55 +399,15 @@ class AnalysisAgent(BaseAgent):
             "analysis": llm_response
         }
 
-    def _store_analysis(self, analysis_data: Dict[str, Any], analysis_type: str):
-        """Store analysis results in the database.
-        
-        Args:
-            analysis_data: Analysis results to store
-            analysis_type: Type of analysis ('30sec' or '5min')
-        """
-        if not analysis_data:
-            return
-        
-        try:
-            storage_data = {
-                "session_id": self.session_id,
-                "start_timestamp": analysis_data["start_time"],
-                "end_timestamp": analysis_data["end_time"],
-                "analysis_type": analysis_type,
-                "source_activities": analysis_data["source_ids"],
-                "llm_response": analysis_data["analysis"]
-            }
-
-            entity_id = str(uuid.uuid4())
-            try:
-                self.db_tools.add_entity("activity_analysis", entity_id, storage_data)
-            except Exception as e:
-                if "duplicate key" in str(e):
-                    self.db_tools.update_entity("activity_analysis", entity_id, storage_data)
-                else:
-                    raise
-        except Exception as e:
-            self.logger.error(f"Failed to store analysis: {e}")
-
     def analyze_session(
         self,
         session_id: str,
         custom_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Analyze an entire session.
-        
-        Args:
-            session_id: ID of the session to analyze
-            custom_prompt: Optional custom prompt for analysis
-            from_cli: Whether this is called from CLI (determines storage behavior)
-            
-        Returns:
-            Session analysis results
-        """
-        # Get all raw data and analyses for the session
+        """Analyze an entire session."""
+        # Get all analyses for the session
         query = {"session_id": session_id, "analysis_type": "special"}
-        special_analyses = self.db_tools.query_entities(
+        special_analyses = self.db_interface.query_entities(
             "activity_analysis",
             query,
             sort_by="start_timestamp",
@@ -440,58 +417,42 @@ class AnalysisAgent(BaseAgent):
         all_analyses = special_analyses
         if len(special_analyses) < self.repeat_interval:
             regular_query = {"session_id": session_id}
-            all_analyses = self.db_tools.query_entities(
+            all_analyses = self.db_interface.query_entities(
                 "activity_analysis",
                 regular_query,
                 sort_by="start_timestamp",
                 sort_order="asc"
             )
         
-        # Get raw data for timing information only
+        # Get raw data for timing information
         raw_query = {"session_id": session_id}
-        raw_data = self.db_tools.query_entities(
+        raw_data = self.db_interface.query_entities(
             "activity_raw",
             raw_query,
-            sort_by="timestamp",
+            sort_by="created_at",
             sort_order="asc"
         )
         
         if not raw_data:
             return None
-            
-        # Original context (commented out but preserved)
-        # original_context = {
-        #     "session_id": session_id,
-        #     "duration": "session",
-        #     "start_time": raw_data[0]["timestamp"],
-        #     "end_time": raw_data[-1]["timestamp"],
-        #     "raw_data": raw_data,
-        #     "analyses": analyses,
-        #     "total_keys": sum(r["total_keys_pressed"] for r in raw_data),
-        #     "total_clicks": sum(r["total_clicks"] for r in raw_data),
-        #     "total_scrolls": sum(r["total_scrolls"] for r in raw_data)
-        # }
 
-        start_dt = datetime.fromisoformat(raw_data[0]["timestamp"])
-        end_dt = datetime.fromisoformat(raw_data[-1]["timestamp"])
-
+        start_dt = raw_data[0]["created_at"]
+        end_dt = raw_data[-1]["created_at"]
+        
         start_time = start_dt.timestamp()
         end_time = end_dt.timestamp()
-
         duration = end_time - start_time
 
-        # New simplified context
         context = {
             "session_id": session_id,
-            "duration": duration,  # Now a number
-            "start_time": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),  # Consistent ISO format
-            "end_time": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),    # Consistent ISO format
+            "duration": duration,
+            "start_time": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+            "end_time": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
             "analyses": [a["llm_response"] for a in all_analyses],
             "custom_prompt": custom_prompt
         }
         
         analysis_prompt = self.load_prompt("analysis_session", context)
-            
         system_prompt = self.load_prompt("analysis_system_session", context)
         
         llm_response = self.call_llm(
@@ -501,18 +462,14 @@ class AnalysisAgent(BaseAgent):
         )
         
         return {
-            "start_time": raw_data[0]["timestamp"],
-            "end_time": raw_data[-1]["timestamp"],
+            "start_time": raw_data[0]["created_at"],
+            "end_time": raw_data[-1]["created_at"],
             "source_ids": [record["id"] for record in raw_data],
             "analysis": llm_response
         }
 
-    def execute(self) -> Dict[str, Any]:
-        """Execute the analysis agent.
-        
-        Returns:
-            Status of the analysis process
-        """
+    def execute(self, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Execute the analysis agent."""
         try:
             self.start_analysis_cycles()
             return {

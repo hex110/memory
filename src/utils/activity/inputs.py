@@ -1,3 +1,13 @@
+"""Input tracking functionality.
+
+This module provides input device monitoring with support for:
+- Event filtering through privacy settings
+- Thread-safe event collection
+- Automatic device discovery
+- Window-based activity tracking
+- Error recovery
+"""
+
 import asyncio
 import threading
 import logging
@@ -8,28 +18,22 @@ import evdev
 from evdev import InputDevice, categorize, ecodes
 
 from src.utils.exceptions import KeyboardTrackingError
-from src.utils.activity.windows import WindowManagerInterface
+from src.utils.activity.windows import WindowManager
 from src.utils.activity.session import WindowSession
+from src.utils.activity.privacy import PrivacyConfig
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
-class ActivityTracker:
-    """Tracks keyboard and mouse activity using evdev.
+class InputTracker:
+    """Tracks keyboard and mouse activity using evdev."""
     
-    This class handles input device monitoring with support for:
-    - Event filtering through callbacks
-    - Thread-safe event collection
-    - Automatic device discovery
-    - Window-based activity tracking
-    - Error recovery
-    """
-    
-    def __init__(self, window_manager: WindowManagerInterface) -> None:
-        """Initialize the activity tracker.
+    def __init__(self, window_manager: WindowManager, privacy_config: PrivacyConfig) -> None:
+        """Initialize the input tracker.
         
         Args:
             window_manager: Window manager implementation to use
+            privacy_config: Privacy configuration to use
         """
         # Event storage
         self.current_session: Optional[WindowSession] = None
@@ -39,6 +43,7 @@ class ActivityTracker:
         self.devices: List[InputDevice] = []
         self.is_running = False
         self.window_manager = window_manager
+        self.privacy_config = privacy_config
         
         # Event filtering
         self._should_track_callback: Optional[Callable[[], bool]] = None
@@ -53,12 +58,7 @@ class ActivityTracker:
         self._total_clicks = 0
         self._total_scrolls = 0
         
-        logger.debug("ActivityTracker initialized")
-    
-    def set_tracking_filter(self, callback: Callable[[], bool]) -> None:
-        """Set a callback to determine if events should be tracked."""
-        self._should_track_callback = callback
-        logger.debug("Tracking filter set")
+        logger.debug("InputTracker initialized")
     
     def _get_button_name(self, code: int) -> str:
         """Convert button codes to human-readable names."""
@@ -85,7 +85,12 @@ class ActivityTracker:
         # End current session if exists and add it to the list of sessions
         if self.current_session:
             self.current_session.end_session(now)
-            self.pending_sessions.append(self.current_session)
+            
+            # Only add non-private sessions to pending
+            if not self.privacy_config.is_private(window_info):
+                self.pending_sessions.append(self.current_session)
+            else:
+                logger.debug(f"Skipping private session for {window_info['class']}")
 
         # Start new session
         self.current_session = WindowSession(window_info, now)
@@ -115,7 +120,7 @@ class ActivityTracker:
             
         except Exception as e:
             raise KeyboardTrackingError(f"Failed to find input devices: {e}")
-    
+
     async def _monitor_device(self, device: InputDevice) -> None:
         """Monitor a single input device for events."""
         try:
@@ -129,6 +134,10 @@ class ActivityTracker:
                 
                 # Skip if no active window session
                 if not self.current_session:
+                    continue
+
+                # Skip if current window is private
+                if self.privacy_config.is_private(self.current_session.window_info):
                     continue
 
                 if event.type == evdev.ecodes.EV_KEY:
@@ -230,7 +239,7 @@ class ActivityTracker:
             self._thread = threading.Thread(target=self._run_event_loop)
             self._thread.daemon = True
             self._thread.start()
-            logger.info("Activity tracking started")
+            logger.info("Input tracking started")
             
         except Exception as e:
             raise KeyboardTrackingError(f"Failed to start tracking: {e}")
@@ -238,7 +247,7 @@ class ActivityTracker:
     def stop(self) -> None:
         """Stop tracking keyboard and mouse events."""
         try:
-            logger.info("Stopping activity tracking...")
+            logger.info("Stopping input tracking...")
             self.is_running = False
             
             # End current session if exists
@@ -269,24 +278,59 @@ class ActivityTracker:
     
     def get_events(self) -> Dict[str, Any]:
         """Get collected events and reset counters.
-        
+
         Returns:
             Dict containing window sessions and event totals
         """
-        
         # Get current window info
         current_window = self.window_manager.get_active_window()
-        
-        # End current session and get the data, if any
+
+        # End current session and get the data
         session_data = None
         if self.current_session:
             self.current_session.end_session(datetime.now())
-            session_data = self.current_session.to_dict()
+            if self.privacy_config.is_private(self.current_session.window_info):
+                # Keep metadata but replace events with privacy filter
+                session_data = {
+                    'window_class': self.current_session.window_info['class'],
+                    'window_title': self.current_session.window_info['title'],
+                    'duration': self.current_session.duration,
+                    'start_time': self.current_session.start_time.isoformat(),
+                    'end_time': self.current_session.end_time.isoformat(),
+                    'privacy_filtered': True,
+                    'key_count': self.current_session.key_count,
+                    'click_count': self.current_session.click_count,
+                    'scroll_count': self.current_session.scroll_count,
+                    'key_events': [],  # Empty events list
+                    'click_events': [],
+                    'scroll_events': []
+                }
+            else:
+                session_data = self.current_session.to_dict()
             self.current_session = None
-        
+
+        # Process pending sessions
         sessions = []
-        
-        sessions.extend([s.to_dict() for s in self.pending_sessions])
+        for session in self.pending_sessions:
+            if self.privacy_config.is_private(session.window_info):
+                # Keep metadata but replace events with privacy filter
+                sessions.append({
+                    'window_class': session.window_info['class'],
+                    'window_title': session.window_info['title'],
+                    'duration': session.duration,
+                    'start_time': session.start_time.isoformat(),
+                    'end_time': session.end_time.isoformat(),
+                    'privacy_filtered': True,
+                    'key_count': session.key_count,
+                    'click_count': session.click_count,
+                    'scroll_count': session.scroll_count,
+                    'key_events': [],  # Empty events list
+                    'click_events': [],
+                    'scroll_events': []
+                })
+            else:
+                sessions.append(session.to_dict())
+
 
         if session_data:
             sessions.append(session_data)
@@ -300,7 +344,7 @@ class ActivityTracker:
             },
             "timestamp": datetime.now().isoformat()
         }
-        
+
         # Clear pending sessions and reset counters
         self.pending_sessions = []
         self._total_keys = 0
@@ -310,5 +354,5 @@ class ActivityTracker:
         # Create new session with the active window
         if current_window:
             self._on_window_focus_change(current_window)
-        
+
         return events

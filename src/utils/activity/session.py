@@ -86,4 +86,4 @@ class WindowSession:
             "click_count": self.click_count,
             "scroll_count": self.scroll_count,
             "key_count": self.key_count
-        } 
+        }

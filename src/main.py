@@ -280,13 +280,13 @@ def save_analyses_to_files(db: PostgreSQLDatabase, session_id: str):
     latest_activity = db.query_entities(
         "activity_raw",
         {"session_id": session_id},
-        sort_by="timestamp",
+        sort_by="created_at",
         sort_order="desc",
         limit=1
     )
     # print latest activity without screenshot
-    latest_time = latest_activity[0]["timestamp"]
-    latest_time_float = datetime.fromisoformat(latest_time).timestamp()
+    latest_time = latest_activity[0]["created_at"]
+    latest_time_float = latest_time.timestamp()
     is_ongoing = (time.time() - latest_time_float) < 60 if latest_activity else False
     session_status = "[ONGOING SESSION]" if is_ongoing else "[COMPLETED SESSION]"
     
@@ -301,7 +301,7 @@ def save_analyses_to_files(db: PostgreSQLDatabase, session_id: str):
             f.write(f"{session_status}\nSession ID: {session_id}\n\n")
         
         for analysis in analyses:
-            analysis["end_timestamp"] = datetime.fromisoformat(analysis["end_timestamp"])
+            analysis["end_timestamp"] = analysis["created_at"]
 
         analyses.sort(key=lambda x: x["end_timestamp"])
 
@@ -334,7 +334,7 @@ def get_last_session_id(db: PostgreSQLDatabase) -> str:
     sessions = db.query_entities(
         "activity_raw",
         {},
-        sort_by="timestamp",
+        sort_by="created_at",
         sort_order="desc",
         limit=1
     )
@@ -384,7 +384,7 @@ def analyze_session(config_path: str, db: PostgreSQLDatabase, session_id: Option
             sessions = db.query_entities(
                 "activity_raw",
                 query,
-                sort_by="timestamp",
+                sort_by="created_at",
                 sort_order="desc",
                 limit=1
             )

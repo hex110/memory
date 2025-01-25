@@ -5,6 +5,8 @@ Duration: {{duration}}
 Window Activity Summary:
 {{window_summaries}}
 
+Note: Some windows may be marked as "privacy filtered" - this indicates activity was tracked but specific interactions were hidden for privacy.
+
 Aggregate Metrics:
 - Total Keys: {{total_keys}}
 - Total Clicks: {{total_clicks}}

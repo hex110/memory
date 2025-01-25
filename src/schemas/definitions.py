@@ -55,9 +55,9 @@ def get_database_schema() -> Dict[str, Any]:
                    "description": "UUID of the monitoring session this log belongs to"
                },
                "screenshot": {
-                   "type": "bytea",
+                   "type": "text",
                    "nullable": True,
-                   "description": "Screenshot image data"
+                   "description": "Base64 encoded screenshot image data"
                },
                "window_sessions": {
                    "type": "jsonb",
