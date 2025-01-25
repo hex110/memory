@@ -1,5 +1,6 @@
 """Activity monitoring agent implementation."""
 
+import asyncio
 import time
 import threading
 import json
@@ -20,7 +21,7 @@ from src.utils.events import ActivityEventSystem, ActivityEvent, ActivityEventTy
 class MonitorAgent(BaseAgent):
     def __init__(
         self,
-        config_path: str,
+        config: Dict[str, Any],
         prompt_folder: str,
         db_interface: DatabaseInterface,
         ontology_manager: OntologyManager,
@@ -28,7 +29,7 @@ class MonitorAgent(BaseAgent):
     ):
             
         super().__init__(
-            config_path=config_path,
+            config=config,
             prompt_folder=prompt_folder,
             db_interface=db_interface,
             ontology_manager=ontology_manager
@@ -36,7 +37,7 @@ class MonitorAgent(BaseAgent):
 
         self.logger.info("Initializing MonitorAgent", extra={
             "session_id": session_id,
-            "config_path": config_path
+            "config": config
         })
 
         # Set available tools for this agent
@@ -58,6 +59,8 @@ class MonitorAgent(BaseAgent):
             # Initialize trackers with dependencies
             self.logger.debug("Initializing InputTracker")
             self.input_tracker = InputTracker(self.window_manager, self.privacy_config)
+            # Set up the interrupt callback
+            self.input_tracker.set_interrupt_callback(lambda: asyncio.create_task(self.stop_monitoring()))
             
             self.logger.debug("Initializing ScreenCapture")
             self.screen_capture = ScreenCapture(self.window_manager, self.privacy_config)
@@ -65,7 +68,7 @@ class MonitorAgent(BaseAgent):
             # Monitoring state
             self.is_monitoring = False
             self.monitor_thread = None
-            self.collection_interval = self.config.get("activity_log_interval", 10)
+            self.collection_interval = self.config["tracking"].get("activity_log_interval", 10)
             self.session_id = session_id
             
             self.logger.debug("MonitorAgent initialization complete", extra={
@@ -83,43 +86,36 @@ class MonitorAgent(BaseAgent):
     async def start_monitoring(self):
         """Start the activity monitoring process."""
         try:
-            self.logger.debug("Starting activity monitoring", extra={
-                "session_id": self.session_id,
-                "is_monitoring": self.is_monitoring
-            })
+            self.logger.debug("Starting activity monitoring")
             
             if not self.is_monitoring:
                 self.logger.debug("Starting input tracker")
                 await self.input_tracker.start()
                 
                 self.is_monitoring = True
-                self.monitor_thread = threading.Thread(target=self._monitoring_loop)
-                self.monitor_thread.daemon = True
-                self.monitor_thread.start()
+                # Store the task reference
+                self.monitor_task = asyncio.create_task(self._monitoring_loop())
                 
-                self.logger.info("Activity monitoring started", extra={
-                    "session_id": self.session_id,
-                    "thread_id": self.monitor_thread.ident
-                })
+                self.logger.info("Activity monitoring started")
         except Exception as e:
-            self.logger.error("Failed to start monitoring", extra={
-                "error": str(e),
-                "session_id": self.session_id
-            })
+            self.logger.error("Failed to start monitoring")
             raise
     
     async def stop_monitoring(self):
         """Stop the activity monitoring process."""
         try:
-            self.logger.debug("Stopping activity monitoring", extra={
-                "session_id": self.session_id,
-                "is_monitoring": self.is_monitoring
-            })
+            self.logger.debug("Stopping activity monitoring")
             
             self.is_monitoring = False
-            if self.monitor_thread:
-                self.monitor_thread.join(timeout=1)
-                self.monitor_thread = None
+            
+            # Cancel the monitoring task if it exists
+            if self.monitor_task:
+                self.monitor_task.cancel()
+                try:
+                    await self.monitor_task
+                except asyncio.CancelledError:
+                    pass
+                self.monitor_task = None
             
             # Cleanup trackers
             self.logger.debug("Cleaning up trackers")
@@ -127,38 +123,37 @@ class MonitorAgent(BaseAgent):
             await self.screen_capture.cleanup()
             await self.window_manager.cleanup()
             
-            self.logger.info("Activity monitoring stopped", extra={
-                "session_id": self.session_id
-            })
+            self.logger.info("Activity monitoring stopped")
         except Exception as e:
-            self.logger.error("Failed to stop monitoring", extra={
-                "error": str(e),
-                "session_id": self.session_id
-            })
+            self.logger.error(f"Failed to stop monitoring: {e}")
             raise
     
-    def _monitoring_loop(self):
-        """Main monitoring loop that collects and stores data periodically."""
-        time.sleep(self.collection_interval)
-        
-        while self.is_monitoring:
-            try:
-                # Get data from input tracker
-                activity_data = self.input_tracker.get_events()
+    async def _monitoring_loop(self):
+        """Async monitoring loop that collects and stores data periodically."""
+        try:
+            while self.is_monitoring:
+                try:
+                    # Get data from input tracker
+                    activity_data = await self.input_tracker.get_events()
 
-                # Capture screenshot
-                screen_data = self.screen_capture.capture_and_encode()
-                if screen_data:
-                    activity_data["screenshot"] = screen_data
-                
-                # Store activity data using tool
-                self._store_activity_data(activity_data)
-                
-                time.sleep(self.collection_interval)
-                
-            except Exception as e:
-                self.logger.error(f"Error in monitoring loop: {e}")
-                time.sleep(1)
+                    # Capture screenshot
+                    screen_data = await self.screen_capture.capture_and_encode()
+                    if screen_data:
+                        activity_data["screenshot"] = screen_data
+                    
+                    # Store activity data
+                    await self._store_activity_data(activity_data)
+                    
+                    # Make this cancellable by checking for CancelledError
+                    await asyncio.sleep(self.collection_interval)
+                    
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    self.logger.error(f"Error in monitoring loop: {e}")
+                    await asyncio.sleep(1)
+        finally:
+            self.logger.debug("Monitoring loop ended")
     
     async def _store_activity_data(self, raw_activity_data: Dict[str, Any]):
         """Store raw activity data in the database."""

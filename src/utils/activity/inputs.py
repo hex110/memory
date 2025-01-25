@@ -9,8 +9,10 @@ This module provides input device monitoring with support for:
 """
 
 import asyncio
+import errno
 import logging
 from datetime import datetime
+import select
 from typing import Dict, List, Optional, Any, Callable
 
 import evdev
@@ -47,6 +49,9 @@ class InputTracker:
         # Event filtering
         self._should_track_callback: Optional[Callable[[], bool]] = None
         
+        # Add callback for Ctrl+C detection
+        self._on_interrupt_callback: Optional[Callable[[], None]] = None
+
         # Async management
         self._device_tasks: List[asyncio.Task] = []
         
@@ -57,6 +62,10 @@ class InputTracker:
         
         logger.debug("InputTracker initialized")
     
+    def set_interrupt_callback(self, callback: Callable[[], None]) -> None:
+        """Set callback to be called when Ctrl+C is detected."""
+        self._on_interrupt_callback = callback
+
     def _get_button_name(self, code: int) -> str:
         """Convert button codes to human-readable names."""
         button_map = {
@@ -91,7 +100,6 @@ class InputTracker:
 
         # Start new session
         self.current_session = WindowSession(window_info, now)
-        logger.debug(f"Started new session for {window_info['class']}")
     
     def find_input_devices(self) -> None:
         """Find all keyboard and mouse input devices."""
@@ -121,74 +129,106 @@ class InputTracker:
     async def _monitor_device(self, device: InputDevice) -> None:
         """Monitor a single input device for events."""
         try:
-            async for event in device.async_read_loop():
-                if not self.is_running:
-                    break
+            while self.is_running:
+                try:
+                    async for event in device.async_read_loop():
+                        if not self.is_running:
+                            break
                     
-                # Check if we should track this event
-                if self._should_track_callback and not self._should_track_callback():
-                    continue
+                        # Allow other coroutines to run
+                        await asyncio.sleep(0)
+
+                        # Check for Ctrl+C
+                        if (event.type == evdev.ecodes.EV_KEY and 
+                            event.code == evdev.ecodes.KEY_C and 
+                            event.value == 1):  # Key press
+                            
+                            # Check if Ctrl is held down
+                            active_keys = device.active_keys()
+                            if evdev.ecodes.KEY_LEFTCTRL in active_keys or evdev.ecodes.KEY_RIGHTCTRL in active_keys:
+                                logger.info("Ctrl+C detected, stopping monitoring...")
+                                self.is_running = False
+                                asyncio.create_task(self.stop())
+                                break
+                        
+                        # Check if we should track this event
+                        if self._should_track_callback and not self._should_track_callback():
+                            continue
+
+                        # Skip if no active window session
+                        if not self.current_session:
+                            continue
+
+                        # Skip if current window is private
+                        if self.privacy_config.is_private(self.current_session.window_info):
+                            continue
+
+                        if event.type == evdev.ecodes.EV_KEY:
+                            timestamp = datetime.now().isoformat()
+                            
+                            # Handle mouse buttons (BTN_LEFT to BTN_TASK)
+                            if event.code in range(272, 280):
+                                if event.value == 1:  # Press only
+                                    self._total_clicks += 1
+                                    await self.current_session.add_event("click", {
+                                        "button": self._get_button_name(event.code),
+                                        "timestamp": timestamp
+                                    })
+                            
+                            # Handle keyboard keys
+                            elif event.code in evdev.ecodes.keys:
+                                key_name = evdev.ecodes.keys[event.code]
+                                # Only track actual keyboard keys
+                                if key_name.startswith("KEY_"):
+                                    event_type = ("press" if event.value == 1 else 
+                                                "release" if event.value == 0 else "hold")
+                                    
+                                    if event_type == "press":
+                                        self._total_keys += 1
+                                        # Convert key names to more readable format
+                                        key = key_name[4:]  # Remove KEY_ prefix
+                                        if len(key) == 1:
+                                            key = key.lower()
+                                        elif key in ["LEFTSHIFT", "RIGHTSHIFT", "LEFTCTRL", 
+                                                "RIGHTCTRL", "LEFTALT", "RIGHTALT", 
+                                                "LEFTMETA", "RIGHTMETA"]:
+                                            continue  # Skip modifier keys
+                                        
+                                        await self.current_session.add_event("key", {
+                                            "type": event_type,
+                                            "key": key,
+                                            "timestamp": timestamp
+                                        })
+                                    
+                        elif event.type == evdev.ecodes.EV_REL:
+                            # Track both vertical and horizontal scroll
+                            if event.code in [evdev.ecodes.REL_WHEEL, evdev.ecodes.REL_HWHEEL]:
+                                self._total_scrolls += abs(event.value)
+                                if self.current_session:
+                                    await self.current_session.add_event("scroll", {
+                                        "direction": "vertical" if event.code == evdev.ecodes.REL_WHEEL else "horizontal",
+                                        "amount": event.value,
+                                        "timestamp": datetime.now().isoformat()
+                                    })
                 
-                # Skip if no active window session
-                if not self.current_session:
+                except (OSError, IOError) as e:
+                    if e.errno == errno.ENODEV:  # Device has been removed
+                        break
+                    logger.warning(f"Device error: {e}, retrying...")
+                    await asyncio.sleep(1)
                     continue
-
-                # Skip if current window is private
-                if self.privacy_config.is_private(self.current_session.window_info):
-                    continue
-
-                if event.type == evdev.ecodes.EV_KEY:
-                    timestamp = datetime.now().isoformat()
-                    
-                    # Handle mouse buttons (BTN_LEFT to BTN_TASK)
-                    if event.code in range(272, 280):
-                        if event.value == 1:  # Press only
-                            self._total_clicks += 1
-                            await self.current_session.add_event("click", {
-                                "button": self._get_button_name(event.code),
-                                "timestamp": timestamp
-                            })
-                    
-                    # Handle keyboard keys
-                    elif event.code in evdev.ecodes.keys:
-                        key_name = evdev.ecodes.keys[event.code]
-                        # Only track actual keyboard keys
-                        if key_name.startswith("KEY_"):
-                            event_type = ("press" if event.value == 1 else 
-                                        "release" if event.value == 0 else "hold")
-                            
-                            if event_type == "press":
-                                self._total_keys += 1
-                                # Convert key names to more readable format
-                                key = key_name[4:]  # Remove KEY_ prefix
-                                if len(key) == 1:
-                                    key = key.lower()
-                                elif key in ["LEFTSHIFT", "RIGHTSHIFT", "LEFTCTRL", 
-                                          "RIGHTCTRL", "LEFTALT", "RIGHTALT", 
-                                          "LEFTMETA", "RIGHTMETA"]:
-                                    continue  # Skip modifier keys
-                                
-                                await self.current_session.add_event("key", {
-                                    "type": event_type,
-                                    "key": key,
-                                    "timestamp": timestamp
-                                })
-                            
-                elif event.type == evdev.ecodes.EV_REL:
-                    # Track both vertical and horizontal scroll
-                    if event.code in [evdev.ecodes.REL_WHEEL, evdev.ecodes.REL_HWHEEL]:
-                        self._total_scrolls += abs(event.value)
-                        if self.current_session:
-                            await self.current_session.add_event("scroll", {
-                                "direction": "vertical" if event.code == evdev.ecodes.REL_WHEEL else "horizontal",
-                                "amount": event.value,
-                                "timestamp": datetime.now().isoformat()
-                            })
-                            
+        
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.warning(f"Device monitoring error: {e}")
             if device in self.devices:
                 self.devices.remove(device)
+        finally:
+            try:
+                device.close()
+            except Exception as e:
+                logger.warning(f"Error closing device: {e}")
     
     async def _monitor_all_devices(self) -> None:
         """Monitor all discovered input devices."""
@@ -197,8 +237,8 @@ class InputTracker:
                 asyncio.create_task(self._monitor_device(device))
                 for device in self.devices
             ]
-            if self._device_tasks:
-                await asyncio.gather(*self._device_tasks, return_exceptions=True)
+            # if self._device_tasks:
+            #     await asyncio.gather(*self._device_tasks, return_exceptions=True)
                 
         except Exception as e:
             raise KeyboardTrackingError(f"Failed to monitor devices: {e}")

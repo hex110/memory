@@ -1,11 +1,9 @@
 import os
 import json
-import logging
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 from src.utils.exceptions import ConfigError
-
-logger = logging.getLogger(__name__)
+from src.utils.logging import configure_logging, get_logger, InteractiveHandler
 
 def get_default_config() -> Dict[str, Any]:
     """Returns default configuration settings."""
@@ -40,6 +38,7 @@ def load_env_vars():
                     key, value = line.split('=', 1)
                     os.environ[key.strip()] = value.strip()
     else:
+        logger = get_logger(__name__)
         logger.warning("\nNo .env file found. You can create one by copying .env.example:")
         logger.warning("cp .env.example .env\n")
 
@@ -84,6 +83,7 @@ def ensure_config_exists() -> Path:
     """Create default config if it doesn't exist. Returns config path."""
     config_path = Path(__file__).parent.parent / "config.json"
     if not config_path.exists():
+        logger = get_logger(__name__)
         logger.warning(f"Config file not found at {config_path}")
         config = get_default_config()
         
@@ -98,20 +98,20 @@ def ensure_config_exists() -> Path:
         
     return config_path
 
-def load_config() -> Dict[str, Any]:
+def load_config_and_logging() -> Tuple[Dict[str, Any], InteractiveHandler]:
     """Loads configuration from a JSON file and replaces environment variables."""
     try:
         config_path = ensure_config_exists()
-
-        # Load environment variables first
         load_env_vars()
         
         with open(config_path, 'r') as f:
             config = json.load(f)
+        
+        handler = configure_logging(development=config.get("development", True))
             
         # Replace environment variables in config
-        return replace_env_vars(config)
-        
+        return replace_env_vars(config), handler
+    
     except FileNotFoundError:
         raise ConfigError(f"Configuration file not found at {config_path}")
     except json.JSONDecodeError:

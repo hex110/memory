@@ -13,7 +13,7 @@ from google import genai
 from google.genai import types
 from json_repair import repair_json
 from src.utils.config import (
-    load_config, ConfigError
+    ConfigError
 )
 from src.utils.exceptions import (
     APIError, APIConnectionError, APIResponseError,
@@ -35,7 +35,7 @@ class BaseAgent(AgentInterface):
     
     def __init__(
         self,
-        config_path: str,
+        config: Dict[str, Any],
         prompt_folder: str,
         db_interface: DatabaseInterface,
         ontology_manager: OntologyManager
@@ -54,7 +54,7 @@ class BaseAgent(AgentInterface):
         # Set up logging
         self.logger = get_logger(f"src.agent.{self.__class__.__name__.lower()}")
         
-        self.config = load_config()
+        self.config = config
         
         # Validate required config
         if not self.config.get("llm"):
@@ -76,7 +76,7 @@ class BaseAgent(AgentInterface):
         # Load tool implementations
         self._load_tool_implementations()
     
-    async def _load_tool_implementations(self):
+    def _load_tool_implementations(self):
         """Load implementations for available tools."""
         from src.schemas.tools_definitions import get_tool_implementations
         

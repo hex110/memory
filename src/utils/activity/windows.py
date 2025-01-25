@@ -72,14 +72,11 @@ class WindowManager:
             return "Unknown"
             
         window_class = window_class.lower()
-        logger.debug(f"Classifying window class: {window_class}")
         
         for patterns, class_name in self.WINDOW_CLASS_MAPPINGS.items():
             if any(pattern in window_class for pattern in patterns):
-                logger.debug(f"Matched {window_class} to {class_name}")
                 return class_name
-                
-        logger.debug(f"No classification found for {window_class}")
+
         return window_class.title()
     
     async def update_active_workspaces(self) -> None:
@@ -100,7 +97,6 @@ class WindowManager:
                     new_active_workspaces.add(workspace_id)
             
             self.active_workspaces = new_active_workspaces
-            logger.debug(f"Active workspaces updated: {self.active_workspaces}")
             
         except Exception as e:
             logger.error(f"Failed to update active workspaces: {e}")
@@ -185,7 +181,7 @@ class WindowManager:
                             class_name = self._get_window_class_name(window_class)
                             
                             if self._focus_callback:
-                                self._focus_callback({
+                                await self._focus_callback({
                                     "class": class_name,
                                     "title": window_title,
                                     "original_class": window_class

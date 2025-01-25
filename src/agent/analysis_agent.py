@@ -15,14 +15,14 @@ class AnalysisAgent(BaseAgent):
     
     def __init__(
         self,
-        config_path: str,
+        config: Dict[str, Any],
         prompt_folder: str,
         db_interface: DatabaseInterface,
         ontology_manager: OntologyManager,
         session_id: str
     ):
         super().__init__(
-            config_path=config_path,
+            config=config,
             prompt_folder=prompt_folder,
             db_interface=db_interface,
             ontology_manager=ontology_manager
@@ -30,7 +30,7 @@ class AnalysisAgent(BaseAgent):
 
         self.logger.debug("Initializing AnalysisAgent", extra={
             "session_id": session_id,
-            "config_path": config_path
+            "config": config
         })
 
         try:

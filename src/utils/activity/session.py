@@ -31,10 +31,6 @@ class WindowSession:
         self.click_count = 0
         self.scroll_count = 0
         self.key_count = 0
-        
-        logger.debug(
-            f"Started window session for {window_info['class']} at {start_time}"
-        )
     
     async def add_event(self, event_type: str, event_data: Dict[str, Any]) -> None:
         """Add an input event to this session.
@@ -58,10 +54,10 @@ class WindowSession:
             end_time: When this window lost focus
         """
         self.end_time = end_time
-        logger.debug(
-            f"Ended window session for {self.window_info['class']} "
-            f"after {self.duration:.2f} seconds"
-        )
+        # logger.debug(
+        #     f"Ended window session for {self.window_info['class']} "
+        #     f"after {self.duration:.2f} seconds"
+        # )
     
     @property
     def duration(self) -> float:
