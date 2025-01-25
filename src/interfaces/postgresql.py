@@ -24,7 +24,7 @@ class DatabaseInterface(ABC):
     """
 
     @abstractmethod
-    def initialize_database(self) -> None:
+    async def initialize_database(self) -> None:
         """Initialize database with schema from definitions.py.
         
         This method:
@@ -38,7 +38,7 @@ class DatabaseInterface(ABC):
         pass
 
     @abstractmethod
-    def add_entity(self, collection_name: str, data: Dict[str, Any]) -> str:
+    async def add_entity(self, collection_name: str, data: Dict[str, Any]) -> str:
         """Add a new entity to a collection.
         
         Args:
@@ -55,7 +55,7 @@ class DatabaseInterface(ABC):
         pass
 
     @abstractmethod
-    def get_entity(self, collection_name: str, entity_id: str) -> Dict[str, Any]:
+    async def get_entity(self, collection_name: str, entity_id: str) -> Dict[str, Any]:
         """Get an entity by ID.
         
         Args:
@@ -68,7 +68,7 @@ class DatabaseInterface(ABC):
         pass
 
     @abstractmethod
-    def get_entities(self, collection_name: str) -> List[Dict[str, Any]]:
+    async def get_entities(self, collection_name: str) -> List[Dict[str, Any]]:
         """Get all entities in a collection.
         
         Args:
@@ -80,7 +80,7 @@ class DatabaseInterface(ABC):
         pass
 
     @abstractmethod
-    def update_entity(self, collection_name: str, entity_id: str, 
+    async def update_entity(self, collection_name: str, entity_id: str, 
                      data: Dict[str, Any], upsert: bool = False) -> None:
         """Update an existing entity.
         
@@ -97,7 +97,7 @@ class DatabaseInterface(ABC):
         pass
 
     @abstractmethod
-    def delete_entity(self, collection_name: str, entity_id: str) -> None:
+    async def delete_entity(self, collection_name: str, entity_id: str) -> None:
         """Delete an entity.
         
         Args:
@@ -110,7 +110,7 @@ class DatabaseInterface(ABC):
         pass
 
     @abstractmethod
-    def query_entities(
+    async def query_entities(
         self,
         collection_name: str,
         query: Dict[str, Any],
@@ -136,6 +136,6 @@ class DatabaseInterface(ABC):
         pass
 
     @abstractmethod
-    def close(self) -> None:
+    async def close(self) -> None:
         """Close the database connection."""
         pass

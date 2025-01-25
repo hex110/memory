@@ -8,23 +8,29 @@ from typing import Dict, Any, Optional
 from jsonschema import validate as json_validate
 from src.interfaces.ontology import OntologyInterface
 from src.utils.exceptions import ValidationError
+from src.schemas.definitions import get_ontology_schema
 
 class OntologyManager(OntologyInterface):
     """Schema validator and tracker for the database system."""
     
-    def __init__(self, initial_schema: Optional[Dict[str, Any]] = None):
-        """Initialize the ontology manager.
-        
-        Args:
-            initial_schema: Initial schema definitions from definitions.py
-        """
-        self._schemas = initial_schema or {}
+    def __init__(self):
+        """Initialize basic configuration."""
+        self._schemas = get_ontology_schema()
         
         # Validate the schema itself has the expected structure
         if not isinstance(self._schemas, dict):
             raise ValidationError("Schema must be a dictionary")
         if "concepts" not in self._schemas:
             raise ValidationError("Schema must have a 'concepts' section")
+    
+    @classmethod
+    async def create(cls) -> 'OntologyManager':
+        """Create and initialize a new ontology manager instance.
+        
+        Returns:
+            Initialized ontology manager instance
+        """
+        return cls()
     
     @property
     def schemas(self) -> Dict[str, Any]:
@@ -47,7 +53,7 @@ class OntologyManager(OntologyInterface):
             raise ValidationError(f"Unknown entity type: {entity_type}")
         return self._schemas["concepts"][entity_type]
     
-    def validate_entity(self, entity_type: str, data: Dict[str, Any]) -> bool:
+    async def validate_entity(self, entity_type: str, data: Dict[str, Any]) -> bool:
         """Validate an entity against its schema.
         
         Args:

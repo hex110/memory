@@ -9,7 +9,6 @@ This module provides input device monitoring with support for:
 """
 
 import asyncio
-import threading
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Callable
@@ -49,9 +48,7 @@ class InputTracker:
         self._should_track_callback: Optional[Callable[[], bool]] = None
         
         # Async management
-        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
-        self._thread: Optional[threading.Thread] = None
-        self._tasks: List[asyncio.Task] = []
+        self._device_tasks: List[asyncio.Task] = []
         
         # Event totals
         self._total_keys = 0
@@ -74,7 +71,7 @@ class InputTracker:
         }
         return button_map.get(code, f"Button.{code}")
     
-    def _on_window_focus_change(self, window_info: Dict[str, str]) -> None:
+    async def _on_window_focus_change(self, window_info: Dict[str, str]) -> None:
         """Handle window focus changes.
         
         Args:
@@ -84,7 +81,7 @@ class InputTracker:
         
         # End current session if exists and add it to the list of sessions
         if self.current_session:
-            self.current_session.end_session(now)
+            await self.current_session.end_session(now)
             
             # Only add non-private sessions to pending
             if not self.privacy_config.is_private(window_info):
@@ -147,7 +144,7 @@ class InputTracker:
                     if event.code in range(272, 280):
                         if event.value == 1:  # Press only
                             self._total_clicks += 1
-                            self.current_session.add_event("click", {
+                            await self.current_session.add_event("click", {
                                 "button": self._get_button_name(event.code),
                                 "timestamp": timestamp
                             })
@@ -171,7 +168,7 @@ class InputTracker:
                                           "LEFTMETA", "RIGHTMETA"]:
                                     continue  # Skip modifier keys
                                 
-                                self.current_session.add_event("key", {
+                                await self.current_session.add_event("key", {
                                     "type": event_type,
                                     "key": key,
                                     "timestamp": timestamp
@@ -182,7 +179,7 @@ class InputTracker:
                     if event.code in [evdev.ecodes.REL_WHEEL, evdev.ecodes.REL_HWHEEL]:
                         self._total_scrolls += abs(event.value)
                         if self.current_session:
-                            self.current_session.add_event("scroll", {
+                            await self.current_session.add_event("scroll", {
                                 "direction": "vertical" if event.code == evdev.ecodes.REL_WHEEL else "horizontal",
                                 "amount": event.value,
                                 "timestamp": datetime.now().isoformat()
@@ -196,29 +193,17 @@ class InputTracker:
     async def _monitor_all_devices(self) -> None:
         """Monitor all discovered input devices."""
         try:
-            self._tasks = [
+            self._device_tasks = [
                 asyncio.create_task(self._monitor_device(device))
                 for device in self.devices
             ]
-            if self._tasks:
-                await asyncio.gather(*self._tasks, return_exceptions=True)
+            if self._device_tasks:
+                await asyncio.gather(*self._device_tasks, return_exceptions=True)
                 
         except Exception as e:
             raise KeyboardTrackingError(f"Failed to monitor devices: {e}")
     
-    def _run_event_loop(self) -> None:
-        """Run the event loop in a separate thread."""
-        try:
-            self._event_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self._event_loop)
-            self._event_loop.run_until_complete(self._monitor_all_devices())
-        except Exception as e:
-            logger.error(f"Event loop error: {e}")
-        finally:
-            if self._event_loop:
-                self._event_loop.close()
-    
-    def start(self) -> None:
+    async def start(self) -> None:
         """Start tracking keyboard and mouse events."""
         try:
             if not self.devices:
@@ -228,23 +213,21 @@ class InputTracker:
                 raise KeyboardTrackingError("No input devices found")
             
             # Set up window focus tracking
-            self.window_manager.setup_focus_tracking(self._on_window_focus_change)
+            await self.window_manager.setup_focus_tracking(self._on_window_focus_change)
 
             # Start with current window if any
-            current_window = self.window_manager.get_active_window()
+            current_window = await self.window_manager.get_active_window()
             if current_window:
-                self._on_window_focus_change(current_window)
+                await self._on_window_focus_change(current_window)
             
             self.is_running = True
-            self._thread = threading.Thread(target=self._run_event_loop)
-            self._thread.daemon = True
-            self._thread.start()
+            await self._monitor_all_devices()
             logger.info("Input tracking started")
             
         except Exception as e:
             raise KeyboardTrackingError(f"Failed to start tracking: {e}")
     
-    def stop(self) -> None:
+    async def stop(self) -> None:
         """Stop tracking keyboard and mouse events."""
         try:
             logger.info("Stopping input tracking...")
@@ -252,13 +235,12 @@ class InputTracker:
             
             # End current session if exists
             if self.current_session:
-                self.current_session.end_session(datetime.now())
+                await self.current_session.end_session(datetime.now())
                 self.current_session = None
             
             # Cancel all tasks
-            if self._event_loop and self._tasks:
-                for task in self._tasks:
-                    self._event_loop.call_soon_threadsafe(task.cancel)
+            for task in self._device_tasks:
+                task.cancel()
             
             # Close devices
             for device in self.devices:
@@ -269,26 +251,22 @@ class InputTracker:
             
             self.devices = []
             
-            # Wait for thread to finish
-            if self._thread and self._thread.is_alive():
-                self._thread.join(timeout=1.0)
-                
         except Exception as e:
             raise KeyboardTrackingError(f"Failed to stop tracking: {e}")
     
-    def get_events(self) -> Dict[str, Any]:
+    async def get_events(self) -> Dict[str, Any]:
         """Get collected events and reset counters.
 
         Returns:
             Dict containing window sessions and event totals
         """
         # Get current window info
-        current_window = self.window_manager.get_active_window()
+        current_window = await self.window_manager.get_active_window()
 
         # End current session and get the data
         session_data = None
         if self.current_session:
-            self.current_session.end_session(datetime.now())
+            await self.current_session.end_session(datetime.now())
             if self.privacy_config.is_private(self.current_session.window_info):
                 # Keep metadata but replace events with privacy filter
                 session_data = {
@@ -306,7 +284,7 @@ class InputTracker:
                     'scroll_events': []
                 }
             else:
-                session_data = self.current_session.to_dict()
+                session_data = await self.current_session.to_dict()
             self.current_session = None
 
         # Process pending sessions
@@ -329,8 +307,7 @@ class InputTracker:
                     'scroll_events': []
                 })
             else:
-                sessions.append(session.to_dict())
-
+                sessions.append(await session.to_dict())
 
         if session_data:
             sessions.append(session_data)
@@ -353,6 +330,6 @@ class InputTracker:
 
         # Create new session with the active window
         if current_window:
-            self._on_window_focus_change(current_window)
+            await self._on_window_focus_change(current_window)
 
         return events

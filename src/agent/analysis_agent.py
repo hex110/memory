@@ -21,6 +21,11 @@ class AnalysisAgent(BaseAgent):
         ontology_manager: OntologyManager,
         session_id: str
     ):
+        self.logger.debug("Initializing AnalysisAgent", extra={
+            "session_id": session_id,
+            "config_path": config_path
+        })
+        
         super().__init__(
             config_path=config_path,
             prompt_folder=prompt_folder,
@@ -28,64 +33,133 @@ class AnalysisAgent(BaseAgent):
             ontology_manager=ontology_manager
         )
 
-        # Set available tools for this agent
-        # self.available_tools = [
-        #     "database.query_entities",
-        #     "database.add_entity",
-        #     "database.update_entity"
-        # ]
-        self.available_tools = []
+        try:
+            # Set available tools for this agent
+            self.available_tools = []
 
-        self.session_id = session_id
-        self.event_system = ActivityEventSystem()
-        self.is_running = False
-        self.completed_analyses = 0
-
-        self.collection_interval = self.config.get("activity_log_interval", 30)  # seconds
-        self.repeat_interval = 10
-        
-    def start_analysis_cycles(self):
-        """Start both analysis cycles."""
-        if not self.is_running:
-            self.is_running = True
-            self._subscribe_to_events()
-            self.logger.info("Analysis started")
-    
-    def stop_analysis_cycles(self):
-        """Stop all analysis cycles and perform final session analysis."""
-        if self.is_running:
+            self.session_id = session_id
+            self.event_system = ActivityEventSystem()
             self.is_running = False
-            self.logger.info("Analysis stopped")
+            self.completed_analyses = 0
+
+            self.collection_interval = self.config.get("activity_log_interval", 30)  # seconds
+            self.repeat_interval = 10
             
-            # Perform final session analysis
-            final_analysis = self.analyze_session(self.session_id)
-            if final_analysis:
-                self._store_analysis(final_analysis, "final")
+            self.logger.debug("AnalysisAgent initialization complete", extra={
+                "session_id": session_id,
+                "collection_interval": self.collection_interval,
+                "repeat_interval": self.repeat_interval
+            })
+            
+        except Exception as e:
+            self.logger.error("Failed to initialize AnalysisAgent", extra={
+                "error": str(e),
+                "session_id": session_id
+            })
+            raise
+        
+    async def start_analysis_cycles(self):
+        """Start both analysis cycles."""
+        try:
+            self.logger.debug("Starting analysis cycles", extra={
+                "session_id": self.session_id,
+                "is_running": self.is_running
+            })
+            
+            if not self.is_running:
+                self.is_running = True
+                await self._subscribe_to_events()
+                self.logger.info("Analysis started", extra={
+                    "session_id": self.session_id
+                })
+        except Exception as e:
+            self.logger.error("Failed to start analysis cycles", extra={
+                "error": str(e),
+                "session_id": self.session_id
+            })
+            raise
     
-    def _subscribe_to_events(self):
+    async def stop_analysis_cycles(self):
+        """Stop all analysis cycles and perform final session analysis."""
+        try:
+            self.logger.debug("Stopping analysis cycles", extra={
+                "session_id": self.session_id,
+                "is_running": self.is_running
+            })
+            
+            if self.is_running:
+                self.is_running = False
+                self.logger.info("Analysis stopped", extra={
+                    "session_id": self.session_id
+                })
+                
+                # Perform final session analysis
+                self.logger.debug("Starting final session analysis")
+                final_analysis = await self.analyze_session(self.session_id)
+                if final_analysis:
+                    await self._store_analysis(final_analysis, "final")
+                    self.logger.info("Final analysis completed", extra={
+                        "session_id": self.session_id
+                    })
+        except Exception as e:
+            self.logger.error("Failed to stop analysis cycles", extra={
+                "error": str(e),
+                "session_id": self.session_id
+            })
+            raise
+    
+    async def _subscribe_to_events(self):
         """Subscribe to activity events."""
-        self.event_system.broadcaster.subscribe(
-            ActivityEventType.ACTIVITY_STORED,
-            self._handle_activity_stored
-        )
-        self.event_system.broadcaster.subscribe(
-            ActivityEventType.ANALYSIS_STORED,
-            self._handle_analysis_interval
-        )
+        try:
+            self.logger.debug("Subscribing to events", extra={
+                "session_id": self.session_id
+            })
+            
+            await self.event_system.broadcaster.subscribe(
+                ActivityEventType.ACTIVITY_STORED,
+                self._handle_activity_stored
+            )
+            await self.event_system.broadcaster.subscribe(
+                ActivityEventType.ANALYSIS_STORED,
+                self._handle_analysis_interval
+            )
+            
+            self.logger.debug("Successfully subscribed to events")
+        except Exception as e:
+            self.logger.error("Failed to subscribe to events", extra={
+                "error": str(e),
+                "session_id": self.session_id
+            })
+            raise
     
-    def _handle_activity_stored(self, event: ActivityEvent):
+    async def _handle_activity_stored(self, event: ActivityEvent):
         """Handle incoming activity stored events."""
         if not self.is_running or event.session_id != self.session_id:
             return
 
         try:
+            self.logger.debug("Handling activity stored event", extra={
+                "session_id": self.session_id,
+                "event_timestamp": event.timestamp
+            })
+
             # Always do regular analysis
             end_time = datetime.now()
             start_time = end_time - timedelta(seconds=self.collection_interval)
-            raw_data = self._get_recent_raw_data(start_time, end_time)
+            
+            self.logger.debug("Fetching recent raw data", extra={
+                "start_time": start_time,
+                "end_time": end_time
+            })
+            
+            raw_data = await self._get_recent_raw_data(start_time, end_time)
             if raw_data:
-                analysis = self._analyze_short_term(raw_data)
-                self._store_analysis(analysis, "regular")
+                self.logger.debug("Analyzing short term data", extra={
+                    "data_points": len(raw_data)
+                })
+                
+                analysis = await self._analyze_short_term(raw_data)
+                await self._store_analysis(analysis, "regular")
 
                 # Broadcast analysis stored event
                 event = ActivityEvent(
@@ -94,12 +168,17 @@ class AnalysisAgent(BaseAgent):
                     data=analysis,
                     event_type=ActivityEventType.ANALYSIS_STORED
                 )
-                self.event_system.broadcaster.broadcast(event)
+                await self.event_system.broadcaster.broadcast(event)
+                
+                self.logger.debug("Short term analysis completed and stored")
 
         except Exception as e:
-            self.logger.error(f"Error handling activity stored event: {e}")
+            self.logger.error("Error handling activity stored event", extra={
+                "error": str(e),
+                "session_id": self.session_id
+            })
 
-    def _handle_analysis_interval(self, event: ActivityEvent):
+    async def _handle_analysis_interval(self, event: ActivityEvent):
         if not self.is_running or event.session_id != self.session_id:
             return
 
@@ -109,11 +188,11 @@ class AnalysisAgent(BaseAgent):
             if self.completed_analyses >= self.repeat_interval:
                 end_time = datetime.now()
                 start_time = end_time - timedelta(seconds=(self.collection_interval * self.repeat_interval))
-                raw_data = self._get_recent_raw_data(start_time, end_time)
+                raw_data = await self._get_recent_raw_data(start_time, end_time)
                 
                 if raw_data:
-                    analysis = self._analyze_medium_term(raw_data)
-                    self._store_analysis(analysis, "special")
+                    analysis = await self._analyze_medium_term(raw_data)
+                    await self._store_analysis(analysis, "special")
                 
                 self.completed_analyses = 0
 
@@ -467,17 +546,3 @@ class AnalysisAgent(BaseAgent):
             "source_ids": [record["id"] for record in raw_data],
             "analysis": llm_response
         }
-
-    def execute(self, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Execute the analysis agent."""
-        try:
-            self.start_analysis_cycles()
-            return {
-                "status": "success",
-                "message": "Analysis cycles started successfully"
-            }
-        except Exception as e:
-            return {
-                "status": "error",
-                "message": f"Failed to start analysis: {str(e)}"
-            }

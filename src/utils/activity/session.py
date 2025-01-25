@@ -36,7 +36,7 @@ class WindowSession:
             f"Started window session for {window_info['class']} at {start_time}"
         )
     
-    def add_event(self, event_type: str, event_data: Dict[str, Any]) -> None:
+    async def add_event(self, event_type: str, event_data: Dict[str, Any]) -> None:
         """Add an input event to this session.
         
         Args:
@@ -51,7 +51,7 @@ class WindowSession:
         elif event_type == "scroll":
             self.scroll_count += 1
     
-    def end_session(self, end_time: datetime) -> None:
+    async def end_session(self, end_time: datetime) -> None:
         """End this window session.
         
         Args:
@@ -70,7 +70,7 @@ class WindowSession:
             return (datetime.now() - self.start_time).total_seconds()
         return (self.end_time - self.start_time).total_seconds()
     
-    def to_dict(self) -> Dict[str, Any]:
+    async def to_dict(self) -> Dict[str, Any]:
         """Convert session to dictionary format for storage.
         
         Returns:

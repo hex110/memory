@@ -1,13 +1,38 @@
-import json
 import os
-from typing import Dict, Any, Optional
+import json
+import logging
+from pathlib import Path
+from typing import Dict, Any
 from src.utils.exceptions import ConfigError
 
+logger = logging.getLogger(__name__)
+
+def get_default_config() -> Dict[str, Any]:
+    """Returns default configuration settings."""
+    return {
+        "development": True,  # Enable debug logging and development features
+        "server": {
+            "host": "0.0.0.0",
+            "port": 8000
+        },
+        "database": {
+            "host": "localhost",
+            "database": "memory_db",
+            "user": os.getenv("USER", "postgres"),
+            "password": ""  # Empty for peer authentication
+        },
+        "llm": {
+            "model": "gemini-2.0-flash-exp"
+        },
+        "tracking": {
+            "activity_log_interval": 30
+        }
+    }
 
 def load_env_vars():
     """Load environment variables from .env file if it exists."""
-    env_path = os.path.join(os.getcwd(), '.env')
-    if os.path.exists(env_path):
+    env_path = Path.cwd() / '.env'
+    if env_path.exists():
         with open(env_path) as f:
             for line in f:
                 line = line.strip()
@@ -15,19 +40,11 @@ def load_env_vars():
                     key, value = line.split('=', 1)
                     os.environ[key.strip()] = value.strip()
     else:
-        print("\nNo .env file found. You can create one by copying .env.example:")
-        print("cp .env.example .env\n")
-
+        logger.warning("\nNo .env file found. You can create one by copying .env.example:")
+        logger.warning("cp .env.example .env\n")
 
 def replace_env_vars(config: Dict) -> Dict:
-    """Recursively replace environment variables in config values.
-    
-    Args:
-        config (Dict): Configuration dictionary
-        
-    Returns:
-        Dict: Configuration with environment variables replaced
-    """
+    """Recursively replace environment variables in config values."""
     result = {}
     missing_vars = []
     
@@ -42,7 +59,7 @@ def replace_env_vars(config: Dict) -> Dict:
                     missing_vars.append(env_var)
                 else:
                     result[key] = os.environ[env_var]
-            # Also handle $VAR syntax
+            # Handle $VAR syntax
             elif value.startswith('$'):
                 env_var = value[1:]
                 if env_var not in os.environ:
@@ -63,194 +80,39 @@ def replace_env_vars(config: Dict) -> Dict:
         
     return result
 
+def ensure_config_exists() -> Path:
+    """Create default config if it doesn't exist. Returns config path."""
+    config_path = Path(__file__).parent.parent / "config.json"
+    if not config_path.exists():
+        logger.warning(f"Config file not found at {config_path}")
+        config = get_default_config()
+        
+        # Create config directory if it doesn't exist
+        config_path.parent.mkdir(exist_ok=True)
+        
+        # Write default config
+        with open(config_path, 'w') as f:
+            json.dump(config, f, indent=2)
+        
+        logger.info(f"Created default config at {config_path}")
+        
+    return config_path
 
-def load_config(path: str) -> Dict:
-    """Loads configuration from a JSON file and replaces environment variables.
-    
-    Args:
-        path (str): Path to the JSON configuration file.
-        
-    Returns:
-        Dict: Dictionary containing the configuration data.
-        
-    Raises:
-        ConfigError: If file is not found or JSON is invalid.
-    """
+def load_config(config_path: Path) -> Dict[str, Any]:
+    """Loads configuration from a JSON file and replaces environment variables."""
     try:
         # Load environment variables first
         load_env_vars()
         
-        with open(path, 'r') as f:
+        with open(config_path, 'r') as f:
             config = json.load(f)
             
         # Replace environment variables in config
         return replace_env_vars(config)
+        
     except FileNotFoundError:
-        raise ConfigError(f"Configuration file not found at {path}")
+        raise ConfigError(f"Configuration file not found at {config_path}")
     except json.JSONDecodeError:
-        raise ConfigError(f"Error decoding json at file: {path}")
+        raise ConfigError(f"Error decoding json at file: {config_path}")
     except Exception as e:
         raise ConfigError(f"Error loading configuration: {str(e)}")
-
-
-def get_config(config: Dict, key: str) -> Any:
-    """Gets a configuration value given a key.
-    
-    Args:
-        config (Dict): Configuration dictionary.
-        key (str): Key to look up in the configuration.
-        
-    Returns:
-        Any: The value associated with the key, or None if not found.
-    """
-    return config.get(key)
-
-
-def set_config(config: Dict, key: str, value: Any) -> None:
-    """Sets a configuration value given a key and a value.
-    
-    Args:
-        config (Dict): Configuration dictionary.
-        key (str): Key to set in the configuration.
-        value (Any): Value to set for the given key.
-    """
-    config[key] = value
-
-
-def get_llm_config(config: Dict) -> Dict[str, Any]:
-    """Gets the LLM configuration section.
-    
-    Args:
-        config (Dict): Configuration dictionary.
-        
-    Returns:
-        Dict[str, Any]: LLM configuration dictionary.
-        
-    Raises:
-        ConfigError: If LLM configuration is missing.
-    """
-    llm_config = config.get('llm')
-    if not llm_config:
-        raise ConfigError("LLM configuration section missing")
-    return llm_config
-
-
-def get_provider_config(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Get provider-specific configuration.
-    
-    Args:
-        config: The configuration dictionary
-        
-    Returns:
-        Dict containing provider-specific configuration
-        
-    Raises:
-        ConfigError: If provider is not supported
-    """
-    if "llm" not in config:
-        raise ConfigError("\nMissing 'llm' section in config.json. Please check your configuration.")
-        
-    provider = config["llm"].get("provider", "gemini").lower()
-    
-    if provider == "gemini":
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            raise ConfigError(
-                "\nGEMINI_API_KEY not found in environment variables.\n"
-                "1. Get an API key from: https://makersuite.google.com/app/apikey\n"
-                "2. Add it to your .env file:\n"
-                "GEMINI_API_KEY=your_key_here"
-            )
-        return {
-            "base_url": "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent",
-            "api_key": api_key,
-            "model": "gemini-pro"
-        }
-    elif provider == "openrouter":
-        api_key = os.environ.get("OPENROUTER_API_KEY")
-        if not api_key:
-            raise ConfigError(
-                "\nOPENROUTER_API_KEY not found in environment variables.\n"
-                "1. Get an API key from: https://openrouter.ai/keys\n"
-                "2. Add it to your .env file:\n"
-                "OPENROUTER_API_KEY=your_key_here"
-            )
-        return {
-            "base_url": "https://openrouter.ai/api/v1/chat/completions",
-            "api_key": api_key,
-            "model": config["llm"].get("model", "google/gemini-2.0-flash-exp:free")
-        }
-    else:
-        raise ConfigError(f"\nUnsupported provider: {provider}\nSupported providers are: gemini, openrouter")
-
-
-def get_api_key(config: Dict, override_key: Optional[str] = None) -> str:
-    """Gets the API key from config or override.
-    
-    Args:
-        config (Dict): Configuration dictionary.
-        override_key (Optional[str]): Optional override API key.
-        
-    Returns:
-        str: The API key to use.
-        
-    Raises:
-        ConfigError: If no API key is found.
-    """
-    provider_config = get_provider_config(config)
-    api_key = override_key or provider_config['api_key']
-    if not api_key:
-        raise ConfigError("API key not found in config, override, or environment")
-    return api_key
-
-
-def get_model(config: Dict, override_model: Optional[str] = None) -> str:
-    """Gets the model name from config or override.
-    
-    Args:
-        config (Dict): Configuration dictionary.
-        override_model (Optional[str]): Optional override model name.
-        
-    Returns:
-        str: The model name to use.
-    """
-    provider_config = get_provider_config(config)
-    return override_model or provider_config['model']
-
-
-def get_base_url(config: Dict, override_url: Optional[str] = None) -> str:
-    """Gets the base URL from config or override.
-    
-    Args:
-        config (Dict): Configuration dictionary.
-        override_url (Optional[str]): Optional override base URL.
-        
-    Returns:
-        str: The base URL to use.
-    """
-    provider_config = get_provider_config(config)
-    return override_url or provider_config['base_url']
-
-
-def is_dev_mode(config: Dict) -> bool:
-    """Checks if the config is in development mode.
-    
-    Args:
-        config (Dict): Configuration dictionary.
-        
-    Returns:
-        bool: True if in development mode, False otherwise.
-    """
-    return get_config(config, "environment") == "development"
-
-
-def is_prod_mode(config: Dict) -> bool:
-    """Checks if the config is in production mode.
-    
-    Args:
-        config (Dict): Configuration dictionary.
-        
-    Returns:
-        bool: True if in production mode, False otherwise.
-    """
-    return get_config(config, "environment") == "production"

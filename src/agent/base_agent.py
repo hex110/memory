@@ -13,7 +13,7 @@ from google import genai
 from google.genai import types
 from json_repair import repair_json
 from src.utils.config import (
-    load_config, get_provider_config, ConfigError
+    load_config, ConfigError
 )
 from src.utils.exceptions import (
     APIError, APIConnectionError, APIResponseError,
@@ -51,24 +51,30 @@ class BaseAgent(AgentInterface):
             ConfigError: If required config values are missing
         """
         # Set up logging
+        print("Initializing BaseAgent")
         self.logger = logging.getLogger(f"src.agent.{self.__class__.__name__.lower()}")
         
+        print("Initializing BaseAgent")
         self.config = load_config(config_path)
         
+        print("Initializing BaseAgent")
         # Validate required config
         if not self.config.get("llm"):
             raise ConfigError("Missing 'llm' section in config")
         
-        # Get provider-specific configuration
-        provider_config = get_provider_config(self.config)
-
-        self.client = genai.Client(api_key=provider_config["api_key"])
-        self.model = "gemini-2.0-flash-exp"
+        print("Initializing BaseAgent")
+        # Initialize Gemini client
+        self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+        self.model = self.config["llm"].get("model", "gemini-2.0-flash-exp")
         
+        print("Initializing BaseAgent")
         self.env = Environment(loader=FileSystemLoader(prompt_folder))
         
+        print("Initializing BaseAgent")
         self.db_interface = db_interface
         self.ontology_manager = ontology_manager
+
+        print("Initializing BaseAgent")
 
         # Initialize tool registry
         self.tool_registry = {}
@@ -76,8 +82,10 @@ class BaseAgent(AgentInterface):
         
         # Load tool implementations
         self._load_tool_implementations()
+
+        print("Initializing BaseAgent")
     
-    def _load_tool_implementations(self):
+    async def _load_tool_implementations(self):
         """Load implementations for available tools."""
         from src.schemas.tools_definitions import get_tool_implementations
         
@@ -109,13 +117,13 @@ class BaseAgent(AgentInterface):
         template = self.env.get_template(f"{prompt_name}.txt")
         return template.render(**context)
     
-    def call_llm(
+    async def call_llm(
         self,
         prompt: Union[str, List[Dict[str, Any]]],
         temperature: float = 0.7,
         system_prompt: Optional[str] = None,
         tool_behavior: ToolBehavior = ToolBehavior.USE_AND_ANALYZE_OUTPUT_AND_DONE,
-        specific_tools: Optional[List[str]] = None,  # Add this parameter
+        specific_tools: Optional[List[str]] = None,
         **kwargs
     ) -> str:
         try:
@@ -139,7 +147,7 @@ class BaseAgent(AgentInterface):
             config_kwargs = {k: v for k, v in kwargs.items() 
                            if k not in ['tools', 'tool_config', 'function_call']}
             
-            response = self.client.models.generate_content(
+            response = await self.client.models.generate_content(
                 model=self.model,
                 contents=contents,
                 config=types.GenerateContentConfig(
@@ -152,7 +160,7 @@ class BaseAgent(AgentInterface):
             
             # Check for function calls
             if hasattr(response, 'candidates') and response.candidates[0].content.parts[0].function_call:
-                return self._handle_tool_calls(
+                return await self._handle_tool_calls(
                     message=response.candidates[0].content,
                     messages=messages,
                     tool_behavior=tool_behavior,
@@ -164,7 +172,7 @@ class BaseAgent(AgentInterface):
         except Exception as e:
             raise APIResponseError(f"Error calling LLM: {str(e)}") from e
     
-    def _handle_tool_calls(
+    async def _handle_tool_calls(
         self,
         message: Any,
         messages: List[Dict[str, Any]],
@@ -187,7 +195,7 @@ class BaseAgent(AgentInterface):
         try:
             # Get and call the tool implementation
             function = self.tool_registry[function_call.name]
-            function_response = function(**function_call.args)
+            function_response = await function(**function_call.args)
             
             # Convert function response to string if needed
             if not isinstance(function_response, str):
@@ -208,14 +216,14 @@ class BaseAgent(AgentInterface):
             contents = [{"role": m["role"], "parts": [{"text": m["content"]}]} for m in messages]
             
             if tool_behavior == ToolBehavior.USE_AND_ANALYZE_OUTPUT_AND_DONE:
-                response = self.client.models.generate_content(
+                response = await self.client.models.generate_content(
                     model=self.model,
                     contents=contents
                 )
                 return response.text
                 
             else:  # KEEP_USING_UNTIL_DONE
-                response = self.client.models.generate_content(
+                response = await self.client.models.generate_content(
                     model=self.model,
                     contents=contents,
                     config=types.GenerateContentConfig(
@@ -225,7 +233,7 @@ class BaseAgent(AgentInterface):
                 
                 # Check if there's another function call
                 if hasattr(response.candidates[0].content.parts[0], 'function_call'):
-                    return self._handle_tool_calls(
+                    return await self._handle_tool_calls(
                         message=response.candidates[0].content,
                         messages=messages,
                         tool_behavior=tool_behavior,
@@ -239,18 +247,7 @@ class BaseAgent(AgentInterface):
             return json.dumps({"error": str(e)})
     
     def validate_function_response(self, response: str, model_class: Any) -> Any:
-        """Validate and parse a function response using a Pydantic model.
-        
-        Args:
-            response: JSON string from function call
-            model_class: Pydantic model class to validate against
-            
-        Returns:
-            Validated Pydantic model instance
-            
-        Raises:
-            ValueError: If validation fails
-        """
+        """Validate and parse a function response using a Pydantic model."""
         try:
             if isinstance(response, str):
                 data = json.loads(repair_json(response))
@@ -260,7 +257,7 @@ class BaseAgent(AgentInterface):
         except Exception as e:
             raise ValueError(f"Failed to validate function response: {str(e)}")
     
-    def execute(self) -> Any:
+    async def execute(self) -> Any:
         """Execute the agent's primary function.
         
         This should be implemented by subclasses.

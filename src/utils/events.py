@@ -1,7 +1,7 @@
 from dataclasses import dataclass
-from typing import Dict, Any, Callable, List
+from typing import Dict, Any, Callable, List, Coroutine
 from enum import Enum
-import threading
+import asyncio
 
 class ActivityEventType(Enum):
     ACTIVITY_STORED = "activity_stored"
@@ -16,28 +16,35 @@ class ActivityEvent:
 
 class EventBroadcaster:
     def __init__(self):
-        self._subscribers: Dict[ActivityEventType, List[Callable]] = {}
-        self._lock = threading.Lock()
+        self._subscribers: Dict[ActivityEventType, List[Callable[..., Coroutine]]] = {}
+        self._lock = asyncio.Lock()
+        self._tasks: List[asyncio.Task] = []
         
-    def subscribe(self, event_type: ActivityEventType, callback: Callable):
-        with self._lock:
+    async def subscribe(self, event_type: ActivityEventType, callback: Callable[..., Coroutine]):
+        async with self._lock:
             if event_type not in self._subscribers:
                 self._subscribers[event_type] = []
             self._subscribers[event_type].append(callback)
             
-    def broadcast(self, event: ActivityEvent):
-        with self._lock:
+    async def broadcast(self, event: ActivityEvent):
+        async with self._lock:
             subscribers = self._subscribers.get(event.event_type, []).copy()
 
-        # Launch each callback in its own thread
         for callback in subscribers:
-            threading.Thread(target=self._safe_callback, args=(callback, event)).start()
+            task = asyncio.create_task(self._safe_callback(callback, event))
+            self._tasks.append(task)
+            task.add_done_callback(self._tasks.remove)
     
-    def _safe_callback(self, callback: Callable, event: ActivityEvent):
+    async def _safe_callback(self, callback: Callable[..., Coroutine], event: ActivityEvent):
         try:
-            callback(event)
+            await callback(event)
         except Exception as e:
             print(f"Error in event callback: {str(e)}")
+            
+    async def cleanup(self):
+        """Wait for all pending tasks to complete."""
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
 
 class ActivityEventSystem:
     _instance = None
@@ -47,3 +54,6 @@ class ActivityEventSystem:
             cls._instance = super().__new__(cls)
             cls._instance.broadcaster = EventBroadcaster()
         return cls._instance
+        
+    async def cleanup(self):
+        await self.broadcaster.cleanup()

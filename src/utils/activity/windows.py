@@ -13,12 +13,9 @@ Core features:
 """
 
 import json
-import subprocess
+import asyncio
 import logging
 import os
-import socket
-import threading
-from datetime import datetime
 from typing import Dict, List, Optional, Any, Callable
 
 from src.utils.exceptions import WindowTrackingError
@@ -62,13 +59,13 @@ class WindowManager:
     def __init__(self) -> None:
         """Initialize window manager interface."""
         self.windows: List[Dict[str, Any]] = []
-        self.socket_thread: Optional[threading.Thread] = None
         self.running = False
         self._focus_callback: Optional[Callable[[Dict[str, str]], None]] = None
-        self.update_active_workspaces()
-        self.update_windows()  # Initial window state
-        logger.debug("WindowManager initialized")
-    
+        self._socket_task: Optional[asyncio.Task] = None
+        self._socket_reader: Optional[asyncio.StreamReader] = None
+        self._socket_writer: Optional[asyncio.StreamWriter] = None
+        self.active_workspaces = set()
+        
     def _get_window_class_name(self, window_class: str) -> str:
         """Get the classified window name based on the window class."""
         if not window_class:
@@ -85,16 +82,16 @@ class WindowManager:
         logger.debug(f"No classification found for {window_class}")
         return window_class.title()
     
-    def update_active_workspaces(self) -> None:
+    async def update_active_workspaces(self) -> None:
         """Update the set of active workspaces across all monitors."""
         try:
-            result = subprocess.run(
-                ["hyprctl", "monitors", "-j"],
-                capture_output=True,
-                text=True,
-                check=True
+            proc = await asyncio.create_subprocess_exec(
+                "hyprctl", "monitors", "-j",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
-            monitors = json.loads(result.stdout)
+            stdout, _ = await proc.communicate()
+            monitors = json.loads(stdout.decode())
             
             new_active_workspaces = set()
             for monitor in monitors:
@@ -105,21 +102,19 @@ class WindowManager:
             self.active_workspaces = new_active_workspaces
             logger.debug(f"Active workspaces updated: {self.active_workspaces}")
             
-        except subprocess.CalledProcessError:
-            logger.error("Failed to execute hyprctl monitors")
         except Exception as e:
             logger.error(f"Failed to update active workspaces: {e}")
 
-    def update_windows(self) -> None:
+    async def update_windows(self) -> None:
         """Update the current window state."""
         try:
-            result = subprocess.run(
-                ["hyprctl", "clients", "-j"],
-                capture_output=True,
-                text=True,
-                check=True
+            proc = await asyncio.create_subprocess_exec(
+                "hyprctl", "clients", "-j",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
-            window_list = json.loads(result.stdout)
+            stdout, _ = await proc.communicate()
+            window_list = json.loads(stdout.decode())
             self.windows = []  # Clear existing windows
             
             for window_info in window_list:
@@ -138,21 +133,19 @@ class WindowManager:
                 }
                 self.windows.append(window_data)
                     
-        except subprocess.CalledProcessError:
-            logger.error("Failed to execute hyprctl clients")
         except Exception as e:
             logger.error(f"Failed to update windows: {e}")
     
-    def get_windows(self) -> List[Dict[str, Any]]:
+    async def get_windows(self) -> List[Dict[str, Any]]:
         """Get current window state.
         
         Returns:
             List of dictionaries containing window information
         """
+        await self.update_windows()
         return self.windows
     
-    # Keeping all existing methods unchanged
-    def setup_focus_tracking(self, callback: Callable[[Dict[str, str]], None]) -> None:
+    async def setup_focus_tracking(self, callback: Callable[[Dict[str, str]], None]) -> None:
         """Set up focus change tracking using Hyprland's IPC socket."""
         self._focus_callback = callback
         try:
@@ -162,72 +155,82 @@ class WindowManager:
                 return
 
             runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "/run/user/1000")
-            self.socket_path = f"{runtime_dir}/hypr/{his}/.socket2.sock"
+            socket_path = f"{runtime_dir}/hypr/{his}/.socket2.sock"
             
             self.running = True
-            self.socket_thread = threading.Thread(target=self._listen_for_events)
-            self.socket_thread.daemon = True
-            self.socket_thread.start()
+            self._socket_task = asyncio.create_task(self._listen_for_events(socket_path))
             logger.debug("IPC socket listener started")
             
         except Exception as e:
             logger.error(f"Failed to setup IPC socket: {e}")
     
-    def _listen_for_events(self) -> None:
+    async def _listen_for_events(self, socket_path: str) -> None:
         """Listen for events from Hyprland's IPC socket."""
         try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.connect(self.socket_path)
+            reader, writer = await asyncio.open_unix_connection(socket_path)
+            self._socket_reader = reader
+            self._socket_writer = writer
             
             while self.running:
-                data = sock.recv(1024).decode()
-                if not data:
-                    continue
+                try:
+                    data = await reader.read(1024)
+                    if not data:
+                        continue
+                        
+                    decoded = data.decode()
+                    for line in decoded.strip().split('\n'):
+                        if line.startswith('activewindow>>'):
+                            _, window_info = line.split('>>', 1)
+                            window_class, window_title = window_info.split(',', 1)
+                            class_name = self._get_window_class_name(window_class)
+                            
+                            if self._focus_callback:
+                                self._focus_callback({
+                                    "class": class_name,
+                                    "title": window_title,
+                                    "original_class": window_class
+                                })
+                            await self.update_active_workspaces()
+                            await self.update_windows()
+                        # Add workspace change event handling
+                        elif any(line.startswith(event) for event in [
+                            'workspace>>', 'workspacev2>>', 
+                            'moveworkspace>>', 'moveworkspacev2>>',
+                            'createworkspace>>', 'createworkspacev2>>',
+                            'destroyworkspace>>', 'destroyworkspacev2>>'
+                        ]):
+                            await self.update_active_workspaces()
+                            await self.update_windows()
+                            
+                except Exception as e:
+                    logger.error(f"Error processing socket data: {e}")
+                    if not self.running:
+                        break
+                    await asyncio.sleep(1)
                     
-                for line in data.strip().split('\n'):
-                    if line.startswith('activewindow>>'):
-                        _, window_info = line.split('>>', 1)
-                        window_class, window_title = window_info.split(',', 1)
-                        class_name = self._get_window_class_name(window_class)
-                        
-                        if self._focus_callback:
-                            self._focus_callback({
-                                "class": class_name,
-                                "title": window_title,
-                                "original_class": window_class
-                            })
-                        self.update_active_workspaces()  # Update workspace state
-                        self.update_windows()  # Update window state
-                    # Add workspace change event handling
-                    elif any(line.startswith(event) for event in [
-                        'workspace>>', 'workspacev2>>', 
-                        'moveworkspace>>', 'moveworkspacev2>>',
-                        'createworkspace>>', 'createworkspacev2>>',
-                        'destroyworkspace>>', 'destroyworkspacev2>>'
-                    ]):
-                        self.update_active_workspaces()
-                        self.update_windows()
-                        
         except Exception as e:
             logger.error(f"IPC socket error: {e}")
             self.running = False
         finally:
-            sock.close()
+            if self._socket_writer:
+                self._socket_writer.close()
+                await self._socket_writer.wait_closed()
     
-    def get_active_window(self) -> Optional[Dict[str, str]]:
+    async def get_active_window(self) -> Optional[Dict[str, str]]:
         """Get currently focused window info."""
         try:
-            result = subprocess.run(
-                ["hyprctl", "activewindow"],
-                capture_output=True,
-                text=True,
-                check=True
+            proc = await asyncio.create_subprocess_exec(
+                "hyprctl", "activewindow",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
+            stdout, _ = await proc.communicate()
+            output = stdout.decode()
             
             window_class = ""
             window_title = ""
             
-            for line in result.stdout.split("\n"):
+            for line in output.split("\n"):
                 line = line.strip()
                 if ": " in line:
                     key, value = line.split(": ", 1)
@@ -248,16 +251,20 @@ class WindowManager:
             
             return None
             
-        except subprocess.CalledProcessError:
-            logger.error("Failed to execute hyprctl activewindow")
-            return None
         except Exception as e:
             logger.error(f"Failed to get active window: {e}")
             return None
     
-    def cleanup(self) -> None:
+    async def cleanup(self) -> None:
         """Clean up IPC socket connection."""
         self.running = False
-        if self.socket_thread:
-            self.socket_thread.join(timeout=1.0)
+        if self._socket_task:
+            self._socket_task.cancel()
+            try:
+                await self._socket_task
+            except asyncio.CancelledError:
+                pass
+        if self._socket_writer:
+            self._socket_writer.close()
+            await self._socket_writer.wait_closed()
         logger.debug("WindowManager cleaned up")

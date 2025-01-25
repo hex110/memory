@@ -26,12 +26,23 @@ class MonitorAgent(BaseAgent):
         ontology_manager: OntologyManager,
         session_id: str
     ):
+        print("Initializing MonitorAgent")
+        
         super().__init__(
             config_path=config_path,
             prompt_folder=prompt_folder,
             db_interface=db_interface,
             ontology_manager=ontology_manager
         )
+
+        print("Initializing MonitorAgent")
+
+        self.logger.info("Initializing MonitorAgent", extra={
+            "session_id": session_id,
+            "config_path": config_path
+        })
+
+        print("Initializing MonitorAgent")
 
         # Set available tools for this agent
         self.available_tools = [
@@ -41,43 +52,95 @@ class MonitorAgent(BaseAgent):
 
         self.event_system = ActivityEventSystem()
         
-        # Initialize core services
-        self.window_manager = WindowManager()
-        self.privacy_config = PrivacyConfig()
-        
-        # Initialize trackers with dependencies
-        self.input_tracker = InputTracker(self.window_manager, self.privacy_config)
-        self.screen_capture = ScreenCapture(self.window_manager, self.privacy_config)
-        
-        # Monitoring state
-        self.is_monitoring = False
-        self.monitor_thread = None
-        self.collection_interval = self.config.get("activity_log_interval", 10)
-        self.session_id = session_id
-    
-    def start_monitoring(self):
-        """Start the activity monitoring process."""
-        if not self.is_monitoring:
-            self.input_tracker.start()
-            self.is_monitoring = True
-            self.monitor_thread = threading.Thread(target=self._monitoring_loop)
-            self.monitor_thread.daemon = True
-            self.monitor_thread.start()
-            self.logger.info(f"Activity monitoring started with session ID: {self.session_id}")
-    
-    def stop_monitoring(self):
-        """Stop the activity monitoring process."""
-        self.is_monitoring = False
-        if self.monitor_thread:
-            self.monitor_thread.join(timeout=1)
+        try:
+            # Initialize core services
+            self.logger.debug("Initializing WindowManager")
+            self.window_manager = WindowManager()
+            
+            self.logger.debug("Initializing PrivacyConfig")
+            self.privacy_config = PrivacyConfig()
+            
+            # Initialize trackers with dependencies
+            self.logger.debug("Initializing InputTracker")
+            self.input_tracker = InputTracker(self.window_manager, self.privacy_config)
+            
+            self.logger.debug("Initializing ScreenCapture")
+            self.screen_capture = ScreenCapture(self.window_manager, self.privacy_config)
+            
+            # Monitoring state
+            self.is_monitoring = False
             self.monitor_thread = None
-        
-        # Cleanup trackers
-        self.input_tracker.stop()
-        self.screen_capture.cleanup()
-        self.window_manager.cleanup()
-        
-        self.logger.info("Activity monitoring stopped")
+            self.collection_interval = self.config.get("activity_log_interval", 10)
+            self.session_id = session_id
+            
+            self.logger.debug("MonitorAgent initialization complete", extra={
+                "collection_interval": self.collection_interval,
+                "session_id": self.session_id
+            })
+            
+        except Exception as e:
+            self.logger.error("Failed to initialize MonitorAgent", extra={
+                "error": str(e),
+                "session_id": session_id
+            })
+            raise
+    
+    async def start_monitoring(self):
+        """Start the activity monitoring process."""
+        try:
+            self.logger.debug("Starting activity monitoring", extra={
+                "session_id": self.session_id,
+                "is_monitoring": self.is_monitoring
+            })
+            
+            if not self.is_monitoring:
+                self.logger.debug("Starting input tracker")
+                await self.input_tracker.start()
+                
+                self.is_monitoring = True
+                self.monitor_thread = threading.Thread(target=self._monitoring_loop)
+                self.monitor_thread.daemon = True
+                self.monitor_thread.start()
+                
+                self.logger.info("Activity monitoring started", extra={
+                    "session_id": self.session_id,
+                    "thread_id": self.monitor_thread.ident
+                })
+        except Exception as e:
+            self.logger.error("Failed to start monitoring", extra={
+                "error": str(e),
+                "session_id": self.session_id
+            })
+            raise
+    
+    async def stop_monitoring(self):
+        """Stop the activity monitoring process."""
+        try:
+            self.logger.debug("Stopping activity monitoring", extra={
+                "session_id": self.session_id,
+                "is_monitoring": self.is_monitoring
+            })
+            
+            self.is_monitoring = False
+            if self.monitor_thread:
+                self.monitor_thread.join(timeout=1)
+                self.monitor_thread = None
+            
+            # Cleanup trackers
+            self.logger.debug("Cleaning up trackers")
+            await self.input_tracker.stop()
+            await self.screen_capture.cleanup()
+            await self.window_manager.cleanup()
+            
+            self.logger.info("Activity monitoring stopped", extra={
+                "session_id": self.session_id
+            })
+        except Exception as e:
+            self.logger.error("Failed to stop monitoring", extra={
+                "error": str(e),
+                "session_id": self.session_id
+            })
+            raise
     
     def _monitoring_loop(self):
         """Main monitoring loop that collects and stores data periodically."""
@@ -102,7 +165,7 @@ class MonitorAgent(BaseAgent):
                 self.logger.error(f"Error in monitoring loop: {e}")
                 time.sleep(1)
     
-    def _store_activity_data(self, raw_activity_data: Dict[str, Any]):
+    async def _store_activity_data(self, raw_activity_data: Dict[str, Any]):
         """Store raw activity data in the database."""
         try:
             current_timestamp = datetime.now()
@@ -122,7 +185,7 @@ class MonitorAgent(BaseAgent):
             
             try:
                 # Directly add entity using database interface
-                self.db_interface.add_entity(
+                await self.db_interface.add_entity(
                     "activity_raw", 
                     storage_data,
                 )
@@ -134,7 +197,7 @@ class MonitorAgent(BaseAgent):
                     data=storage_data,
                     event_type=ActivityEventType.ACTIVITY_STORED
                 )
-                self.event_system.broadcaster.broadcast(event)
+                await self.event_system.broadcaster.broadcast(event)
 
             except Exception as e:
                 if "duplicate key" in str(e):
@@ -142,7 +205,7 @@ class MonitorAgent(BaseAgent):
                     storage_data["updated_by"] = "agent"
 
                     # Update entity using database interface
-                    self.db_interface.update_entity(
+                    await self.db_interface.update_entity(
                         "activity_raw",
                         current_timestamp,
                         storage_data
@@ -152,29 +215,3 @@ class MonitorAgent(BaseAgent):
                     
         except Exception as e:
             self.logger.error(f"Error storing activity data: {e}")
-
-    def execute(self, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Execute the monitoring agent.
-        
-        Args:
-            data: Optional configuration data
-            
-        Returns:
-            Status of the monitoring process
-        """
-        try:
-            if data:
-                # Update configuration if provided
-                self.session_id = data.get("session_id", self.session_id)
-                self.collection_interval = data.get("interval", self.collection_interval)
-            
-            self.start_monitoring()
-            return {
-                "status": "success",
-                "message": f"Activity monitoring started with session ID: {self.session_id}"
-            }
-        except Exception as e:
-            return {
-                "status": "error", 
-                "message": f"Failed to start monitoring: {str(e)}"
-            }

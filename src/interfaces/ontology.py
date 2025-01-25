@@ -37,7 +37,7 @@ class OntologyInterface(ABC):
         pass
     
     @abstractmethod
-    def validate_entity(self, entity_type: str, data: Dict[str, Any]) -> bool:
+    async def validate_entity(self, entity_type: str, data: Dict[str, Any]) -> bool:
         """Validate an entity against its schema.
         
         Args:

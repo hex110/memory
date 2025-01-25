@@ -1,68 +1,40 @@
 import logging
-from typing import Dict, Any
+import sys
+from typing import Optional
 
+# Global flag to track if logging has been configured
+_logging_configured = False
 
-def get_logger(name: str) -> logging.Logger:
-    """Gets a named logger with configured handlers and formatters.
-    
-    Args:
-        name (str): Name of the logger.
+def configure_logging(development: bool = True) -> None:
+    """Configure logging for the entire application. Should be called only once at startup."""
+    global _logging_configured
+    if _logging_configured:
+        return
         
-    Returns:
-        logging.Logger: Configured logger instance.
-    """
-    logger = logging.getLogger(name)
-    logger.setLevel(logging.INFO)  # Set minimum log level to INFO
+    # Base configuration
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG if development else logging.INFO)
     
-    # Only add handler if the logger doesn't already have handlers
-    if not logger.handlers:
-        ch = logging.StreamHandler()
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        ch.setFormatter(formatter)
-        logger.addHandler(ch)
+    # Remove any existing handlers
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
     
-    return logger
-
-
-def log_info(logger: logging.Logger, message: str, data: Dict[str, Any]) -> None:
-    """Logs an information message with associated data.
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+    ))
+    root_logger.addHandler(console_handler)
     
-    Args:
-        logger (logging.Logger): Logger instance to use.
-        message (str): Main log message.
-        data (Dict[str, Any]): Additional data to include in the log.
-    """
-    logger.info(f"{message} - Data: {data}")
-
-
-def log_warning(logger: logging.Logger, message: str, data: Dict[str, Any]) -> None:
-    """Logs a warning message with associated data.
+    # Set levels for third-party loggers
+    if not development:
+        logging.getLogger('httpx').setLevel(logging.WARNING)
+        logging.getLogger('asyncio').setLevel(logging.WARNING)
     
-    Args:
-        logger (logging.Logger): Logger instance to use.
-        message (str): Warning message.
-        data (Dict[str, Any]): Additional data to include in the log.
-    """
-    logger.warning(f"{message} - Data: {data}")
+    _logging_configured = True
 
-
-def log_error(logger: logging.Logger, message: str, data: Dict[str, Any]) -> None:
-    """Logs an error message with associated data.
-    
-    Args:
-        logger (logging.Logger): Logger instance to use.
-        message (str): Error message.
-        data (Dict[str, Any]): Additional data to include in the log.
-    """
-    logger.error(f"{message} - Data: {data}")
-
-
-def log_debug(logger: logging.Logger, message: str, data: Dict[str, Any]) -> None:
-    """Logs a debug message with associated data.
-    
-    Args:
-        logger (logging.Logger): Logger instance to use.
-        message (str): Debug message.
-        data (Dict[str, Any]): Additional data to include in the log.
-    """
-    logger.debug(f"{message} - Data: {data}")
+def get_logger(name: Optional[str] = None) -> logging.Logger:
+    """Get a logger instance. Will configure logging if not already done."""
+    if not _logging_configured:
+        configure_logging()
+    return logging.getLogger(name)

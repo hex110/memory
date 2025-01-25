@@ -1,14 +1,12 @@
 """PostgreSQL implementation of the database interface."""
 
 import time
-import psycopg2
+import asyncpg
 import json
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
-from psycopg2 import pool
-from psycopg2.extras import Json, register_uuid
-from psycopg2 import extensions
+from asyncpg import pool
 from src.interfaces.postgresql import DatabaseInterface
 from src.utils.exceptions import DatabaseError
 from src.schemas.validator import SchemaValidator
@@ -17,65 +15,112 @@ class PostgreSQLDatabase(DatabaseInterface):
     """PostgreSQL implementation of the database interface with schema validation."""
 
     def __init__(self, config: Dict[str, Any]):
-        """Initialize PostgreSQL connection and schemas.
+        """Initialize basic configuration.
        
         Args:
             config: Database configuration
         """
         self.config = config
         self.validator = SchemaValidator()
-       
+        self.pool: Optional[asyncpg.Pool] = None
+
+    @classmethod
+    async def create(cls, config: Dict[str, Any]) -> 'PostgreSQLDatabase':
+        """Create and initialize a new database instance.
+        
+        Args:
+            config: Database configuration
+            
+        Returns:
+            Initialized database instance
+            
+        Raises:
+            DatabaseError: If database connection fails
+        """
+        db = cls(config)
+        await db.initialize()
+        return db
+        
+    async def initialize(self) -> None:
+        """Initialize the database connection pool."""
         # Build connection parameters
         conn_params = {
-            "host": config.get("host"),
-            "database": config.get("database"),
-            "user": config.get("user"),
+            "host": self.config.get("host", "localhost"),
+            "database": self.config.get("database"),
+            "user": self.config.get("user"),
+            "password": self.config.get("password"),
+            # "min_size": 1,
+            # "max_size": 10,
+            "command_timeout": 60,
+            "server_settings": {
+                "application_name": "memory_system"
+            }
         }
-        if config.get("password"):
-            conn_params["password"] = config["password"]
-        
-        register_uuid()
-        extensions.register_adapter(uuid.UUID, str)
 
         try:
-            self.connection_pool = pool.ThreadedConnectionPool(
-                1,  # Minimum connections
-                10, # Maximum connections
-                **conn_params
-            )
-            # Register UUID type with psycopg2
-            register_uuid()
+            # First try to establish a single connection to check if the database exists
+            try:
+                conn = await asyncpg.connect(**conn_params)
+                await conn.close()
+            except asyncpg.InvalidCatalogNameError:
+                # Database doesn't exist, try to create it
+                sys_conn_params = conn_params.copy()
+                sys_conn_params["database"] = "postgres"  # Connect to default db
+                sys_conn = await asyncpg.connect(**sys_conn_params)
+                
+                try:
+                    await sys_conn.execute(
+                        f"CREATE DATABASE {conn_params['database']}"
+                    )
+                finally:
+                    await sys_conn.close()
             
-        except psycopg2.OperationalError as e:
+            # Now create the connection pool
+            self.pool = await asyncpg.create_pool(
+                **conn_params,
+                setup=self._setup_connection
+            )
+            
+        except asyncpg.PostgresError as e:
             if "Connection refused" in str(e):
                 raise DatabaseError(
                     "\nPostgreSQL connection failed. Please check:\n"
                     "1. Is PostgreSQL installed?\n"
-                    "2. Is PostgreSQL service running?\n"
-                    "3. Have you initialized the database?\n"
+                    "2. Is PostgreSQL service running? Try: systemctl status postgresql\n"
+                    "3. Is PostgreSQL accepting connections? Check pg_hba.conf\n"
                     "4. Can your user access PostgreSQL?\n"
-                    "5. Check your database settings in config.json and .env\n"
-                ) from e
-            elif "database" in str(e) and "does not exist" in str(e):
-                raise DatabaseError(
-                    f"\nDatabase '{conn_params['database']}' does not exist. To create it:\n"
-                    "1. Connect to PostgreSQL:\n"
-                    "   sudo -u postgres psql\n"
-                    f"2. Create database: CREATE DATABASE {conn_params['database']};\n"
+                    "5. Check your database settings in config.json\n"
+                    f"\nOriginal error: {e}"
                 ) from e
             else:
                 raise DatabaseError(f"Database connection failed: {e}") from e
- 
+        except Exception as e:
+            raise DatabaseError(f"Unexpected error connecting to database: {e}") from e
+
+    async def _setup_connection(self, connection: asyncpg.Connection) -> None:
+        """Set up a new database connection with custom types and settings."""
+        # Set up custom type codecs
+        await connection.set_type_codec(
+            'jsonb',
+            encoder=json.dumps,
+            decoder=json.loads,
+            schema='pg_catalog'
+        )
+        
+        # Set up any other connection-specific settings
+        await connection.execute("SET TIME ZONE 'UTC'")
+
     def _convert_to_pg(self, value: Any, field_type: str) -> Any:
         """Convert Python value to PostgreSQL format."""
-
         if value is None:
             return None
             
         if field_type == "jsonb":
-            return Json(value)
+            return json.dumps(value)
             
-        # Let psycopg2 handle all other conversions
+        if field_type == "uuid" and isinstance(value, str):
+            return uuid.UUID(value)
+            
         return value
  
     def _convert_from_pg(self, value: Any, field_type: str) -> Any:
@@ -97,29 +142,17 @@ class PostgreSQLDatabase(DatabaseInterface):
             return list(value) if value else []
         return value
  
-    def _execute_query(self, query: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:
+    async def _execute_query(self, query: str, params: Optional[tuple] = None) -> List[Dict[str, Any]]:
         """Execute a query and return results."""
-        conn = None
-        for attempt in range(3):  # Try 3 times
-         try:
-             conn = self.connection_pool.getconn()
-             try:
-                 with conn.cursor() as cur:
-                     cur.execute(query, params)
-                     conn.commit()
-                     if cur.description:
-                         cols = [col.name for col in cur.description]
-                         return [dict(zip(cols, row)) for row in cur.fetchall()]
-                     return []
-             except Exception as e:
-                 conn.rollback()
-                 raise
-             finally:
-                 self.connection_pool.putconn(conn)
-         except pool.PoolError:
-             if attempt == 2:  # Last attempt
-                 raise DatabaseError("Database connection pool exhausted")
-             time.sleep(0.1 * (attempt + 1))  # Progressive backoff
+        async with self.pool.acquire() as conn:
+            try:
+                if params:
+                    result = await conn.fetch(query, *params)
+                else:
+                    result = await conn.fetch(query)
+                return [dict(row) for row in result]
+            except Exception as e:
+                raise DatabaseError(f"Query execution failed: {e}")
  
     def _get_pg_type(self, schema_type: str) -> str:
         """Convert schema type to PostgreSQL type."""
@@ -142,16 +175,13 @@ class PostgreSQLDatabase(DatabaseInterface):
             
         return type_mapping.get(schema_type, "TEXT")
  
-    def initialize_database(self) -> None:
-        """Initialize database with current schema.
-        
-        Creates tables and sets up triggers for timestamp management.
-        """
+    async def initialize_database(self) -> None:
+        """Initialize database with current schema."""
         try:
             schema_defs = self.validator.database_schema
             
             # Create updated_at trigger function
-            self._execute_query("""
+            await self._execute_query("""
                 CREATE OR REPLACE FUNCTION update_timestamp()
                 RETURNS TRIGGER AS $$
                 BEGIN
@@ -189,10 +219,10 @@ class PostgreSQLDatabase(DatabaseInterface):
                     {', '.join(columns)}
                 )
                 """
-                self._execute_query(create_table)
+                await self._execute_query(create_table)
                 
                 # Add updated_at trigger
-                self._execute_query(f"""
+                await self._execute_query(f"""
                     DROP TRIGGER IF EXISTS update_timestamp_trigger ON {table_name};
                     CREATE TRIGGER update_timestamp_trigger
                     BEFORE UPDATE ON {table_name}
@@ -202,20 +232,12 @@ class PostgreSQLDatabase(DatabaseInterface):
                 
         except Exception as e:
             raise DatabaseError(f"Database initialization failed: {e}")
- 
-    def _get_cast_type(self, field_type: str) -> Optional[str]:
-        """Get SQL cast type if needed for field type."""
-        if field_type.endswith("[]"):
-            base_type = field_type[:-2]
-            pg_type = self._get_pg_type(base_type)
-            return f"::{pg_type}[]"
-        return None
 
-    def add_entity(self, collection_name: str, data: Dict[str, Any]) -> str:
+    async def add_entity(self, collection_name: str, data: Dict[str, Any]) -> str:
         """Add a new entity to a collection."""
         try:
             schema = self.validator.database_schema[collection_name]
-            self.validator.validate_data(data, schema)
+            await self.validator.validate_data(data, schema)
             
             fields = []
             values = []
@@ -226,7 +248,7 @@ class PostgreSQLDatabase(DatabaseInterface):
                     fields.append(field_name)
                     values.append(self._convert_to_pg(data[field_name], field_def["type"]))
                     cast_type = self._get_cast_type(field_def["type"])
-                    placeholders.append(f"%s{cast_type if cast_type else ''}")
+                    placeholders.append(f"${len(values)}{cast_type if cast_type else ''}")
             
             query = f"""
             INSERT INTO {collection_name} ({', '.join(fields)})
@@ -234,18 +256,18 @@ class PostgreSQLDatabase(DatabaseInterface):
             RETURNING id
             """
             
-            result = self._execute_query(query, tuple(values))
+            result = await self._execute_query(query, tuple(values))
             return str(result[0]["id"])
             
         except Exception as e:
             raise DatabaseError(f"Failed to add entity: {e}")
- 
-    def get_entity(self, collection_name: str, entity_id: str) -> Dict[str, Any]:
+
+    async def get_entity(self, collection_name: str, entity_id: str) -> Dict[str, Any]:
         """Get an entity by ID."""
         try:
             schema = self.validator.database_schema[collection_name]
-            query = f"SELECT * FROM {collection_name} WHERE id = %s"
-            result = self._execute_query(query, (entity_id,))
+            query = f"SELECT * FROM {collection_name} WHERE id = $1"
+            result = await self._execute_query(query, (uuid.UUID(entity_id),))
             
             if not result:
                 return {}
@@ -262,13 +284,13 @@ class PostgreSQLDatabase(DatabaseInterface):
             
         except Exception as e:
             raise DatabaseError(f"Failed to get entity: {e}")
- 
-    def get_entities(self, collection_name: str) -> List[Dict[str, Any]]:
+
+    async def get_entities(self, collection_name: str) -> List[Dict[str, Any]]:
         """Get all entities in a collection."""
         try:
             schema = self.validator.database_schema[collection_name]
             query = f"SELECT * FROM {collection_name}"
-            results = self._execute_query(query)
+            results = await self._execute_query(query)
             
             entities = []
             for row in results:
@@ -284,34 +306,36 @@ class PostgreSQLDatabase(DatabaseInterface):
             
         except Exception as e:
             raise DatabaseError(f"Failed to get entities: {e}")
- 
-    def update_entity(self, collection_name: str, entity_id: str,
+
+    async def update_entity(self, collection_name: str, entity_id: str,
                      data: Dict[str, Any], upsert: bool = False) -> None:
         """Update an entity."""
         try:
             schema = self.validator.database_schema[collection_name]
-            self.validator.validate_data(data, schema)
+            await self.validator.validate_data(data, schema)
             
             set_items = []
             values = []
+            param_count = 1
             
             for field_name, value in data.items():
                 if field_name in schema["properties"]:
                     cast_type = self._get_cast_type(schema["properties"][field_name]["type"])
-                    set_items.append(f"{field_name} = %s{cast_type if cast_type else ''}")
+                    set_items.append(f"{field_name} = ${param_count}{cast_type if cast_type else ''}")
                     values.append(self._convert_to_pg(
                         value,
                         schema["properties"][field_name]["type"]
                     ))
+                    param_count += 1
                     
-            values.append(entity_id)  # For WHERE clause
+            values.append(uuid.UUID(entity_id))  # For WHERE clause
             
             if upsert:
                 fields = list(data.keys())
                 placeholders = []
                 for field_name in fields:
                     cast_type = self._get_cast_type(schema["properties"][field_name]["type"])
-                    placeholders.append(f"%s{cast_type if cast_type else ''}")
+                    placeholders.append(f"${len(placeholders)+1}{cast_type if cast_type else ''}")
                 
                 query = f"""
                 INSERT INTO {collection_name} (id, {', '.join(fields)})
@@ -319,27 +343,27 @@ class PostgreSQLDatabase(DatabaseInterface):
                 ON CONFLICT (id) DO UPDATE
                 SET {', '.join(set_items)}
                 """
-                self._execute_query(query, (entity_id, *values[:-1]))
+                await self._execute_query(query, (uuid.UUID(entity_id), *values[:-1]))
             else:
                 query = f"""
                 UPDATE {collection_name}
                 SET {', '.join(set_items)}
-                WHERE id = %s
+                WHERE id = ${param_count}
                 """
-                self._execute_query(query, tuple(values))
+                await self._execute_query(query, tuple(values))
                 
         except Exception as e:
             raise DatabaseError(f"Update failed: {e}")
- 
-    def delete_entity(self, collection_name: str, entity_id: str) -> None:
+
+    async def delete_entity(self, collection_name: str, entity_id: str) -> None:
         """Delete an entity."""
         try:
-            query = f"DELETE FROM {collection_name} WHERE id = %s"
-            self._execute_query(query, (entity_id,))
+            query = f"DELETE FROM {collection_name} WHERE id = $1"
+            await self._execute_query(query, (uuid.UUID(entity_id),))
         except Exception as e:
             raise DatabaseError(f"Delete failed: {e}")
 
-    def query_entities(
+    async def query_entities(
         self,
         collection_name: str,
         query: Dict[str, Any],
@@ -352,6 +376,7 @@ class PostgreSQLDatabase(DatabaseInterface):
             schema = self.validator.database_schema[collection_name]
             where_clauses = []
             values = []
+            param_count = 1
             
             for field, value in query.items():
                 if field in schema["properties"]:
@@ -367,21 +392,23 @@ class PostgreSQLDatabase(DatabaseInterface):
                             }.get(op)
                             if operator:
                                 where_clauses.append(
-                                    f"{field} {operator} %s{cast_type if cast_type else ''}"
+                                    f"{field} {operator} ${param_count}{cast_type if cast_type else ''}"
                                 )
                                 values.append(self._convert_to_pg(
                                     op_value,
                                     field_type
                                 ))
+                                param_count += 1
                     else:
                         # Handle direct value comparison
                         where_clauses.append(
-                            f"{field} = %s{cast_type if cast_type else ''}"
+                            f"{field} = ${param_count}{cast_type if cast_type else ''}"
                         )
                         values.append(self._convert_to_pg(
                             value,
                             field_type
                         ))
+                        param_count += 1
             
             where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
             order_sql = ""
@@ -396,7 +423,7 @@ class PostgreSQLDatabase(DatabaseInterface):
             WHERE {where_sql}{order_sql}{limit_sql}
             """
             
-            results = self._execute_query(query, tuple(values))
+            results = await self._execute_query(query, tuple(values))
             
             entities = []
             for row in results:
@@ -413,7 +440,7 @@ class PostgreSQLDatabase(DatabaseInterface):
             
         except Exception as e:
             raise DatabaseError(f"Query failed: {e}")
- 
-    def close(self) -> None:
+
+    async def close(self) -> None:
         """Close all database connections."""
-        self.connection_pool.closeall()
+        await self.pool.close()
