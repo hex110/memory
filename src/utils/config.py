@@ -98,9 +98,11 @@ def ensure_config_exists() -> Path:
         
     return config_path
 
-def load_config(config_path: Path) -> Dict[str, Any]:
+def load_config() -> Dict[str, Any]:
     """Loads configuration from a JSON file and replaces environment variables."""
     try:
+        config_path = ensure_config_exists()
+
         # Load environment variables first
         load_env_vars()
         

@@ -21,17 +21,17 @@ class AnalysisAgent(BaseAgent):
         ontology_manager: OntologyManager,
         session_id: str
     ):
-        self.logger.debug("Initializing AnalysisAgent", extra={
-            "session_id": session_id,
-            "config_path": config_path
-        })
-        
         super().__init__(
             config_path=config_path,
             prompt_folder=prompt_folder,
             db_interface=db_interface,
             ontology_manager=ontology_manager
         )
+
+        self.logger.debug("Initializing AnalysisAgent", extra={
+            "session_id": session_id,
+            "config_path": config_path
+        })
 
         try:
             # Set available tools for this agent

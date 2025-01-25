@@ -1,6 +1,7 @@
 """Main entry point for the memory system."""
 
 import asyncio
+import logging
 import signal
 import uuid
 from pathlib import Path
@@ -9,10 +10,7 @@ import platform
 from typing import Dict, Any, List
 from InquirerPy import inquirer
 
-from src.utils.config import (
-    ensure_config_exists,
-    load_config,
-)
+from src.utils.config import load_config
 from src.database.postgresql import PostgreSQLDatabase
 from src.utils.logging import get_logger, configure_logging
 from src.agent.monitor_agent import MonitorAgent
@@ -20,18 +18,17 @@ from src.agent.analysis_agent import AnalysisAgent
 from src.ontology.manager import OntologyManager
 from uvicorn import Config, Server
 
-logger = get_logger(__name__)
-
 class MemorySystemCLI:
     """Command line interface for the memory system."""
     
-    def __init__(self, config: Dict[str, Any], db: PostgreSQLDatabase, ontology_manager: OntologyManager):
+    def __init__(self, config: Dict[str, Any], db: PostgreSQLDatabase, ontology_manager: OntologyManager, logger: logging.Logger):
         """Initialize the CLI interface.
         
         Args:
             config: System configuration
             db: Initialized database interface
             ontology_manager: Initialized ontology manager
+            logger: Logger instance
         """
         self.config = config
         self.db = db
@@ -43,7 +40,7 @@ class MemorySystemCLI:
         self.monitor_agent = None
         self.analysis_agent = None
         self.ontology_manager = ontology_manager
-        
+        self.logger = logger
         # Create responses directory if it doesn't exist
         self.responses_dir = Path("responses")
         self.responses_dir.mkdir(exist_ok=True)
@@ -52,7 +49,7 @@ class MemorySystemCLI:
         self.config_path = Path("config.json")  # We might want to pass this from main
 
     @classmethod
-    async def create(cls, config: Dict[str, Any]) -> 'MemorySystemCLI':
+    async def create(cls, config: Dict[str, Any], logger: logging.Logger) -> 'MemorySystemCLI':
         """Create and initialize a new CLI instance.
         
         Args:
@@ -63,7 +60,7 @@ class MemorySystemCLI:
         """
         db = await PostgreSQLDatabase.create(config["database"])
         ontology_manager = await OntologyManager.create()
-        return cls(config, db, ontology_manager)
+        return cls(config, db, ontology_manager, logger)
 
 
     async def _create_monitor_agent(self):
@@ -117,14 +114,14 @@ class MemorySystemCLI:
             elif choice == "Analyze Session":
                 await self._analyze_session()
         except Exception as e:
-            logger.error("Error handling choice", extra={"choice": choice, "error": str(e)})
+            # self.logger.error("Error handling choice", extra={"choice": choice, "error": str(e)})
             raise  # Re-raise to see the full error during development
 
     async def _start_tracking(self):
         """Start activity tracking."""
         try:
             if not self.tracking_active:
-                logger.info("Starting activity tracking")
+                self.logger.info("Starting activity tracking")
                 self.monitor_agent = await self._create_monitor_agent()
                 self.analysis_agent = await self._create_analysis_agent(self.monitor_agent.session_id)
                 
@@ -132,29 +129,29 @@ class MemorySystemCLI:
                 await self.monitor_agent.start_monitoring()
                 await self.analysis_agent.start_analysis_cycles()
                 self.tracking_active = True
-                logger.info("Activity tracking started successfully")
+                self.logger.info("Activity tracking started successfully")
         except Exception as e:
-            logger.error("Failed to start tracking", extra={"error": str(e)}, exc_info=True)
+            # self.logger.error("Failed to start tracking", extra={"error": str(e)}, exc_info=True)
             raise
 
     async def _stop_tracking(self):
         """Stop activity tracking."""
         try:
             if self.tracking_active:
-                logger.info("Stopping activity tracking")
+                self.logger.info("Stopping activity tracking")
                 await self.monitor_agent.stop_monitoring()
                 await self.analysis_agent.stop_analysis_cycles()
                 self.tracking_active = False
-                logger.info("Activity tracking stopped successfully")
+                self.logger.info("Activity tracking stopped successfully")
         except Exception as e:
-            logger.error("Failed to stop tracking", extra={"error": str(e)})
+            self.logger.error("Failed to stop tracking", extra={"error": str(e)})
             raise
 
     async def _start_server(self):
         """Start the API server."""
         try:
             if not self.server_active:
-                logger.info("Starting server", extra={
+                self.logger.info("Starting server", extra={
                     "host": self.config["server"]["host"],
                     "port": self.config["server"]["port"]
                 })
@@ -167,16 +164,16 @@ class MemorySystemCLI:
                 server = Server(config)
                 self.server_task = asyncio.create_task(server.serve())
                 self.server_active = True
-                logger.info("Server started successfully")
+                self.logger.info("Server started successfully")
         except Exception as e:
-            logger.error("Failed to start server", extra={"error": str(e)})
+            self.logger.error("Failed to start server", extra={"error": str(e)})
             raise
 
     async def _stop_server(self):
         """Stop the API server."""
         try:
             if self.server_active and self.server_task:
-                logger.info("Stopping server")
+                self.logger.info("Stopping server")
                 self.server_task.cancel()
                 try:
                     await self.server_task
@@ -184,9 +181,9 @@ class MemorySystemCLI:
                     pass
                 self.server_task = None
                 self.server_active = False
-                logger.info("Server stopped successfully")
+                self.logger.info("Server stopped successfully")
         except Exception as e:
-            logger.error("Failed to stop server", extra={"error": str(e)})
+            self.logger.error("Failed to stop server", extra={"error": str(e)})
             raise
 
     def open_file(self, filepath: Path):
@@ -199,7 +196,7 @@ class MemorySystemCLI:
             else:                                   # Linux
                 subprocess.run(['xdg-open', filepath])
         except Exception as e:
-            logger.error("Failed to open file", {"filepath": str(filepath), "error": str(e)})
+            self.logger.error("Failed to open file", {"filepath": str(filepath), "error": str(e)})
 
     async def _analyze_session(self):
         """Handle session analysis workflow."""
@@ -224,11 +221,11 @@ class MemorySystemCLI:
             if analysis_file.exists():
                 self.open_file(analysis_file)
         except Exception as e:
-            logger.error("Analysis failed", {"error": str(e)})
+            self.logger.error("Analysis failed", {"error": str(e)})
 
     async def cleanup(self):
         """Clean up all running processes."""
-        logger.info("Cleaning up processes")
+        self.logger.info("Cleaning up processes")
         await self._stop_tracking()
         await self._stop_server()
         if self.db:
@@ -259,28 +256,27 @@ class MemorySystemCLI:
                     await self.handle_choice(choice)
                 except KeyboardInterrupt:
                     # Handle Ctrl+C during inquirer
-                    logger.info("Received interrupt signal")
+                    self.logger.info("Received interrupt signal")
                     await self.cleanup()
                     break
         except asyncio.CancelledError:
-            logger.info("Received cancellation signal")
+            self.logger.info("Received cancellation signal")
             await self.cleanup()
         except Exception as e:
-            logger.error("Error in CLI run", extra={"error": str(e)})
+            self.logger.error("Error in CLI run", extra={"error": str(e)})
             await self.cleanup()
 
 async def async_main():
     """Async main entry point."""
     try:
-        config_path = ensure_config_exists()
-        config = load_config(config_path)
+        config = load_config()
 
         # Configure logging once at startup
         configure_logging(development=config.get("development", True))
         logger = get_logger(__name__)
         
         # Initialize CLI with database
-        cli = await MemorySystemCLI.create(config)
+        cli = await MemorySystemCLI.create(config, logger)
         
         # Handle graceful shutdown
         loop = asyncio.get_event_loop()
@@ -301,6 +297,7 @@ def main():
     try:
         asyncio.run(async_main())
     except KeyboardInterrupt:
+        logger = get_logger(__name__)
         logger.info("Shutting down")  # Remove empty dict
     except Exception as e:
         logger.error("Fatal error", extra={"error": str(e)})

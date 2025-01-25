@@ -22,6 +22,7 @@ from src.utils.exceptions import (
 from src.interfaces.agent import AgentInterface
 from src.interfaces.postgresql import DatabaseInterface
 from src.ontology.manager import OntologyManager
+from src.utils.logging import get_logger
 
 class ToolBehavior(Enum):
     """Controls how tools are used and their outputs handled."""
@@ -51,30 +52,22 @@ class BaseAgent(AgentInterface):
             ConfigError: If required config values are missing
         """
         # Set up logging
-        print("Initializing BaseAgent")
-        self.logger = logging.getLogger(f"src.agent.{self.__class__.__name__.lower()}")
+        self.logger = get_logger(f"src.agent.{self.__class__.__name__.lower()}")
         
-        print("Initializing BaseAgent")
-        self.config = load_config(config_path)
+        self.config = load_config()
         
-        print("Initializing BaseAgent")
         # Validate required config
         if not self.config.get("llm"):
             raise ConfigError("Missing 'llm' section in config")
         
-        print("Initializing BaseAgent")
         # Initialize Gemini client
-        self.client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+        self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         self.model = self.config["llm"].get("model", "gemini-2.0-flash-exp")
         
-        print("Initializing BaseAgent")
         self.env = Environment(loader=FileSystemLoader(prompt_folder))
         
-        print("Initializing BaseAgent")
         self.db_interface = db_interface
         self.ontology_manager = ontology_manager
-
-        print("Initializing BaseAgent")
 
         # Initialize tool registry
         self.tool_registry = {}
@@ -82,8 +75,6 @@ class BaseAgent(AgentInterface):
         
         # Load tool implementations
         self._load_tool_implementations()
-
-        print("Initializing BaseAgent")
     
     async def _load_tool_implementations(self):
         """Load implementations for available tools."""

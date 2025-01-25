@@ -26,8 +26,7 @@ class MonitorAgent(BaseAgent):
         ontology_manager: OntologyManager,
         session_id: str
     ):
-        print("Initializing MonitorAgent")
-        
+            
         super().__init__(
             config_path=config_path,
             prompt_folder=prompt_folder,
@@ -35,14 +34,10 @@ class MonitorAgent(BaseAgent):
             ontology_manager=ontology_manager
         )
 
-        print("Initializing MonitorAgent")
-
         self.logger.info("Initializing MonitorAgent", extra={
             "session_id": session_id,
             "config_path": config_path
         })
-
-        print("Initializing MonitorAgent")
 
         # Set available tools for this agent
         self.available_tools = [
