@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from typing import Dict, Any, Tuple
 from src.utils.exceptions import ConfigError
-from src.utils.logging import configure_logging, get_logger, InteractiveHandler
+from src.utils.logging import configure_logging, get_logger
 
 def get_default_config() -> Dict[str, Any]:
     """Returns default configuration settings."""
@@ -98,7 +98,7 @@ def ensure_config_exists() -> Path:
         
     return config_path
 
-def load_config_and_logging() -> Tuple[Dict[str, Any], InteractiveHandler]:
+def load_config_and_logging() -> Dict[str, Any]:
     """Loads configuration from a JSON file and replaces environment variables."""
     try:
         config_path = ensure_config_exists()
@@ -107,10 +107,10 @@ def load_config_and_logging() -> Tuple[Dict[str, Any], InteractiveHandler]:
         with open(config_path, 'r') as f:
             config = json.load(f)
         
-        handler = configure_logging(development=config.get("development", True))
+        configure_logging(development=config.get("development", True))
             
         # Replace environment variables in config
-        return replace_env_vars(config), handler
+        return replace_env_vars(config)
     
     except FileNotFoundError:
         raise ConfigError(f"Configuration file not found at {config_path}")

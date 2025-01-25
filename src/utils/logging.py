@@ -1,33 +1,20 @@
 """Logging configuration and utilities."""
 
 import logging
-import sys
-import threading
-from typing import Optional
 from pathlib import Path
+import sys
 
-class InteractiveHandler(logging.StreamHandler):
-    """Handler that can be toggled for interactive viewing"""
-    def __init__(self, stream=sys.stdout):
-        super().__init__(stream)
-        self.enabled = True
-        self._lock = threading.Lock()
-        
-    def emit(self, record):
-        with self._lock:
-            if self.enabled:
-                super().emit(record)
-
-def configure_logging(development: bool = True, log_file: Optional[Path] = None) -> InteractiveHandler:
-    """Configure logging with toggleable interactive output.
+def configure_logging(development: bool = True, log_file: Path = Path("memory_system.log")) -> None:
+    """Configure logging to write to a file.
     
     Args:
         development: Whether to run in development mode (sets DEBUG level if True)
-        log_file: Optional path to log file for persistent logging
-        
-    Returns:
-        InteractiveHandler instance that can be used to toggle console output
+        log_file: Path to log file for persistent logging
     """
+    # Delete the old log file if it exists
+    if log_file.exists():
+        log_file.unlink()
+    
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG if development else logging.INFO)
     root_logger.handlers.clear()
@@ -36,42 +23,39 @@ def configure_logging(development: bool = True, log_file: Optional[Path] = None)
         '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
     )
     
-    # Create our toggleable interactive handler
-    interactive_handler = InteractiveHandler()
-    interactive_handler.setFormatter(formatter)
-    root_logger.addHandler(interactive_handler)
+    # File handler for persistent logging
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+
+    # Add visual separator when starting new log file
+    root_logger.info("\n" * 10)
+    root_logger.info("=" * 80)
+    root_logger.info("Starting new logging session")
+    root_logger.info("=" * 80)
+    root_logger.info("\n" * 5)
+
+    logging.captureWarnings(True)
+
+    class StderrToLogger:
+        def __init__(self, logger):
+            self.logger = logger
+        
+        def write(self, buf):
+            for line in buf.rstrip().splitlines():
+                self.logger.error(line.rstrip())
+        
+        def flush(self):
+            pass
     
-    # Optional file handler for persistent logging
-    if log_file:
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(formatter)
-        root_logger.addHandler(file_handler)
+    stderr_logger = logging.getLogger('STDERR')
+    sys.stderr = StderrToLogger(stderr_logger)
     
-    return interactive_handler
+    # Print instructions for opening logs in new terminal
+    # print(f"\nTo view logs in real-time:")
+    # print(f"1. Open a new terminal in VSCode (Ctrl+Shift+` or cmd+shift+`)")
+    # print(f"2. Run: tail -f {log_file.absolute()}\n")
 
 def get_logger(name: str) -> logging.Logger:
-    """Get a logger instance.
-    
-    Args:
-        name: Name of the logger (typically __name__)
-        
-    Returns:
-        Logger instance
-    """
+    """Get a logger instance."""
     return logging.getLogger(name)
-
-def disable_console_logging(handler: InteractiveHandler):
-    """Disable console output.
-    
-    Args:
-        handler: The InteractiveHandler instance to disable
-    """
-    handler.enabled = False
-
-def enable_console_logging(handler: InteractiveHandler):
-    """Enable console output.
-    
-    Args:
-        handler: The InteractiveHandler instance to enable
-    """
-    handler.enabled = True
