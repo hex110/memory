@@ -59,8 +59,6 @@ class InputTracker:
         self._total_keys = 0
         self._total_clicks = 0
         self._total_scrolls = 0
-        
-        logger.debug("InputTracker initialized")
     
     def set_interrupt_callback(self, callback: Callable[[], None]) -> None:
         """Set callback to be called when Ctrl+C is detected."""
@@ -121,7 +119,7 @@ class InputTracker:
                         found_devices.append(device)
             
             self.devices = found_devices
-            logger.info(f"Found {len(self.devices)} input devices")
+            # logger.debug(f"Found {len(self.devices)} input devices")
             
         except Exception as e:
             raise KeyboardTrackingError(f"Failed to find input devices: {e}")
@@ -262,7 +260,7 @@ class InputTracker:
             
             self.is_running = True
             await self._monitor_all_devices()
-            logger.info("Input tracking started")
+            # logger.debug("Input tracking started")
             
         except Exception as e:
             raise KeyboardTrackingError(f"Failed to start tracking: {e}")
@@ -270,7 +268,7 @@ class InputTracker:
     async def stop(self) -> None:
         """Stop tracking keyboard and mouse events."""
         try:
-            logger.info("Stopping input tracking...")
+            # logger.debug("Stopping input tracking...")
             self.is_running = False
             
             # End current session if exists

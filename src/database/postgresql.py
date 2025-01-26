@@ -10,6 +10,9 @@ from asyncpg import pool
 from src.interfaces.postgresql import DatabaseInterface
 from src.utils.exceptions import DatabaseError
 from src.schemas.validator import SchemaValidator
+from src.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 class PostgreSQLDatabase(DatabaseInterface):
     """PostgreSQL implementation of the database interface with schema validation."""
@@ -80,7 +83,8 @@ class PostgreSQLDatabase(DatabaseInterface):
                 **conn_params,
                 setup=self._setup_connection
             )
-            
+
+            # logger.debug("Database pool created")
         except asyncpg.PostgresError as e:
             if "Connection refused" in str(e):
                 raise DatabaseError(
@@ -120,7 +124,12 @@ class PostgreSQLDatabase(DatabaseInterface):
             
         if field_type == "uuid" and isinstance(value, str):
             return uuid.UUID(value)
-            
+        
+        if field_type == "timestamp with time zone":
+            if isinstance(value, str):
+                return datetime.fromisoformat(value)
+            return value
+        
         return value
  
     def _convert_from_pg(self, value: Any, field_type: str) -> Any:
@@ -233,11 +242,25 @@ class PostgreSQLDatabase(DatabaseInterface):
         except Exception as e:
             raise DatabaseError(f"Database initialization failed: {e}")
 
+    def _get_cast_type(self, field_type: str) -> Optional[str]:
+        """Get SQL cast type if needed for field type."""
+        if field_type.endswith("[]"):
+            base_type = field_type[:-2]
+            pg_type = self._get_pg_type(base_type)
+            return f"::{pg_type}[]"
+        cast_mapping = {
+            "uuid": "::uuid",
+            "jsonb": "::jsonb",
+            "timestamp with time zone": "::timestamp with time zone",
+            "bytea": "::bytea"
+        }
+        return cast_mapping.get(field_type)
+
     async def add_entity(self, collection_name: str, data: Dict[str, Any]) -> str:
         """Add a new entity to a collection."""
         try:
             schema = self.validator.database_schema[collection_name]
-            await self.validator.validate_data(data, schema)
+            self.validator.validate_data(data, schema)
             
             fields = []
             values = []
@@ -245,6 +268,8 @@ class PostgreSQLDatabase(DatabaseInterface):
             
             for field_name, field_def in schema["properties"].items():
                 if field_name in data:
+                    # if field_name != "screenshot":
+                    #     logger.debug(f"Field name: {field_name}, field type: {field_def['type']}, value: {data[field_name]}")
                     fields.append(field_name)
                     values.append(self._convert_to_pg(data[field_name], field_def["type"]))
                     cast_type = self._get_cast_type(field_def["type"])
@@ -255,7 +280,7 @@ class PostgreSQLDatabase(DatabaseInterface):
             VALUES ({', '.join(placeholders)})
             RETURNING id
             """
-            
+
             result = await self._execute_query(query, tuple(values))
             return str(result[0]["id"])
             
@@ -312,7 +337,7 @@ class PostgreSQLDatabase(DatabaseInterface):
         """Update an entity."""
         try:
             schema = self.validator.database_schema[collection_name]
-            await self.validator.validate_data(data, schema)
+            self.validator.validate_data(data, schema)
             
             set_items = []
             values = []

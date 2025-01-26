@@ -48,8 +48,8 @@ class MemorySystemCLI:
     async def _create_monitor_agent(self):
         return MonitorAgent(
             config=self.config,
-            prompt_folder="prompts",
-            db_interface=self.db,
+            prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
+            db=self.db,
             ontology_manager=self.ontology_manager,
             session_id=str(uuid.uuid4())
         )
@@ -57,8 +57,8 @@ class MemorySystemCLI:
     async def _create_analysis_agent(self, session_id: str):
         return AnalysisAgent(
             config=self.config,
-            prompt_folder="prompts", 
-            db_interface=self.db,
+            prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
+            db=self.db,
             ontology_manager=self.ontology_manager,
             session_id=session_id
         )
@@ -187,6 +187,21 @@ class MemorySystemCLI:
     async def handle_choice(self, choice: str):
         """Handle user's choice."""
         try:
+            message = ""
+            if choice == "Start Tracking":
+                message = "Starting activity tracking system..."
+            elif choice == "Stop Tracking":
+                message = "Finishing up tracking..."
+            elif choice == "Start Server":
+                message = "Starting server..."
+            elif choice == "Stop Server":
+                message = "Stopping server..."
+            elif choice == "Analyze Session":
+                message = "Analyzing session..."
+            
+            if message:
+                print(f"{message}")
+                
             if choice == "Start Tracking":
                 await self._start_tracking()
             elif choice == "Stop Tracking":
@@ -197,6 +212,11 @@ class MemorySystemCLI:
                 await self._stop_server()
             elif choice == "Analyze Session":
                 await self._analyze_session()
+                
+            # Add a newline after operation completes
+            if message:
+                print()
+
         except Exception as e:
             self.logger.error(f"Error handling choice: {e}")
             raise
@@ -279,6 +299,7 @@ def main():
         logger = get_logger(__name__)
         logger.info("Shutting down")
     except Exception as e:
+        logger = get_logger(__name__)
         logger.error("Fatal error", extra={"error": str(e)})
         raise
 

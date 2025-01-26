@@ -24,7 +24,7 @@ class AgentInterface(ABC):
         self,
         config_path: str,
         prompt_folder: str,
-        db_interface: Any,
+        db: Any,
         ontology_manager: Any
     ):
         """Initialize the agent.
@@ -32,7 +32,7 @@ class AgentInterface(ABC):
         Args:
             config_path: Path to config file
             prompt_folder: Path to prompt templates folder
-            db_interface: Database interface instance
+            db: Database interface instance
             ontology_manager: Ontology manager instance
         """
         pass

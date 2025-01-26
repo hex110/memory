@@ -23,7 +23,7 @@ class MonitorAgent(BaseAgent):
         self,
         config: Dict[str, Any],
         prompt_folder: str,
-        db_interface: DatabaseInterface,
+        db: DatabaseInterface,
         ontology_manager: OntologyManager,
         session_id: str
     ):
@@ -31,14 +31,14 @@ class MonitorAgent(BaseAgent):
         super().__init__(
             config=config,
             prompt_folder=prompt_folder,
-            db_interface=db_interface,
+            db=db,
             ontology_manager=ontology_manager
         )
 
-        self.logger.info("Initializing MonitorAgent", extra={
-            "session_id": session_id,
-            "config": config
-        })
+        # self.logger.debug("Initializing MonitorAgent", extra={
+        #     "session_id": session_id,
+        #     "config": config
+        # })
 
         # Set available tools for this agent
         self.available_tools = [
@@ -50,19 +50,15 @@ class MonitorAgent(BaseAgent):
         
         try:
             # Initialize core services
-            self.logger.debug("Initializing WindowManager")
             self.window_manager = WindowManager()
             
-            self.logger.debug("Initializing PrivacyConfig")
             self.privacy_config = PrivacyConfig()
             
             # Initialize trackers with dependencies
-            self.logger.debug("Initializing InputTracker")
             self.input_tracker = InputTracker(self.window_manager, self.privacy_config)
             # Set up the interrupt callback
             self.input_tracker.set_interrupt_callback(lambda: asyncio.create_task(self.stop_monitoring()))
             
-            self.logger.debug("Initializing ScreenCapture")
             self.screen_capture = ScreenCapture(self.window_manager, self.privacy_config)
             
             # Monitoring state
@@ -71,10 +67,10 @@ class MonitorAgent(BaseAgent):
             self.collection_interval = self.config["tracking"].get("activity_log_interval", 10)
             self.session_id = session_id
             
-            self.logger.debug("MonitorAgent initialization complete", extra={
-                "collection_interval": self.collection_interval,
-                "session_id": self.session_id
-            })
+            # self.logger.debug("MonitorAgent initialization complete", extra={
+            #     "collection_interval": self.collection_interval,
+            #     "session_id": self.session_id
+            # })
             
         except Exception as e:
             self.logger.error("Failed to initialize MonitorAgent", extra={
@@ -86,10 +82,10 @@ class MonitorAgent(BaseAgent):
     async def start_monitoring(self):
         """Start the activity monitoring process."""
         try:
-            self.logger.debug("Starting activity monitoring")
+            # self.logger.debug("Starting activity monitoring")
             
             if not self.is_monitoring:
-                self.logger.debug("Starting input tracker")
+                # self.logger.debug("Starting input tracker")
                 await self.input_tracker.start()
                 
                 self.is_monitoring = True
@@ -104,7 +100,7 @@ class MonitorAgent(BaseAgent):
     async def stop_monitoring(self):
         """Stop the activity monitoring process."""
         try:
-            self.logger.debug("Stopping activity monitoring")
+            # self.logger.debug("Stopping activity monitoring")
             
             self.is_monitoring = False
             
@@ -118,7 +114,7 @@ class MonitorAgent(BaseAgent):
                 self.monitor_task = None
             
             # Cleanup trackers
-            self.logger.debug("Cleaning up trackers")
+            # self.logger.debug("Cleaning up trackers")
             await self.input_tracker.stop()
             await self.screen_capture.cleanup()
             await self.window_manager.cleanup()
@@ -130,30 +126,30 @@ class MonitorAgent(BaseAgent):
     
     async def _monitoring_loop(self):
         """Async monitoring loop that collects and stores data periodically."""
-        try:
-            while self.is_monitoring:
-                try:
-                    # Get data from input tracker
-                    activity_data = await self.input_tracker.get_events()
+        # try:
+        while self.is_monitoring:
+            try:
+                # Get data from input tracker
+                activity_data = await self.input_tracker.get_events()
 
-                    # Capture screenshot
-                    screen_data = await self.screen_capture.capture_and_encode()
-                    if screen_data:
-                        activity_data["screenshot"] = screen_data
-                    
-                    # Store activity data
-                    await self._store_activity_data(activity_data)
-                    
-                    # Make this cancellable by checking for CancelledError
-                    await asyncio.sleep(self.collection_interval)
-                    
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    self.logger.error(f"Error in monitoring loop: {e}")
-                    await asyncio.sleep(1)
-        finally:
-            self.logger.debug("Monitoring loop ended")
+                # Capture screenshot
+                screen_data = await self.screen_capture.capture_and_encode()
+                # if screen_data:
+                #     activity_data["screenshot"] = screen_data
+                
+                # Store activity data
+                await self._store_activity_data(activity_data)
+                
+                # Make this cancellable by checking for CancelledError
+                await asyncio.sleep(self.collection_interval)
+                
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self.logger.error(f"Error in monitoring loop: {e}")
+                await asyncio.sleep(1)
+        # finally:
+            # self.logger.debug("Monitoring loop ended")
     
     async def _store_activity_data(self, raw_activity_data: Dict[str, Any]):
         """Store raw activity data in the database."""
@@ -175,7 +171,7 @@ class MonitorAgent(BaseAgent):
             
             try:
                 # Directly add entity using database interface
-                await self.db_interface.add_entity(
+                result = await self.db.add_entity(
                     "activity_raw", 
                     storage_data,
                 )
@@ -194,10 +190,11 @@ class MonitorAgent(BaseAgent):
                     storage_data["updated_at"] = current_timestamp
                     storage_data["updated_by"] = "agent"
 
+                    self.logger.debug("Calling update_entity...")
                     # Update entity using database interface
-                    await self.db_interface.update_entity(
+                    await self.db.update_entity(
                         "activity_raw",
-                        current_timestamp,
+                        entity_id,
                         storage_data
                     )
                 else:

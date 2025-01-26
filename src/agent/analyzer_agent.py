@@ -25,14 +25,14 @@ class AnalyzerAgent(BaseAgent):
         self,
         config_path: str,
         prompt_folder: str,
-        db_interface: DatabaseInterface,
+        db: DatabaseInterface,
         ontology_manager: OntologyManager
     ):
         """Initialize the analyzer agent."""
         super().__init__(
             config_path=config_path,
             prompt_folder=prompt_folder,
-            db_interface=db_interface,
+            db=db,
             ontology_manager=ontology_manager,
             role="analyzer"
         )

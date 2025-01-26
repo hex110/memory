@@ -55,7 +55,7 @@ async def startup_event():
         curator_agent = CuratorAgent(
             config_path="src/config.json",
             prompt_folder="src/agent/prompts",
-            db_interface=db,
+            db=db,
             ontology_manager=ontology
         )
         

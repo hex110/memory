@@ -4,52 +4,50 @@ import logging
 from pathlib import Path
 import sys
 
+class CustomFormatter(logging.Formatter):
+    def __init__(self):
+        super().__init__()
+        # Format for DEBUG, WARNING, and ERROR
+        self.detailed_fmt = '%(asctime)s [%(pathname)s:%(lineno)d] %(levelname)s: %(message)s'
+        self.detailed_formatter = logging.Formatter(self.detailed_fmt, datefmt='%H:%M:%S,%f'[:-3])
+        
+        # Simpler format for INFO
+        self.info_fmt = '%(asctime)s %(message)s'
+        self.info_formatter = logging.Formatter(self.info_fmt, datefmt='%H:%M:%S,%f'[:-3])
+
+    def format(self, record):
+        if record.levelno == logging.INFO:
+            return self.info_formatter.format(record)
+        return self.detailed_formatter.format(record)
+
 def configure_logging(development: bool = True, log_file: Path = Path("memory_system.log")) -> None:
-    """Configure logging to write to a file.
-    
-    Args:
-        development: Whether to run in development mode (sets DEBUG level if True)
-        log_file: Path to log file for persistent logging
-    """
-    # Delete the old log file if it exists
+    """Configure logging to write to a file only."""
     if log_file.exists():
         log_file.unlink()
     
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG if development else logging.INFO)
+    root_logger.setLevel(logging.WARNING)
     root_logger.handlers.clear()
     
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
-    )
-    
-    # File handler for persistent logging
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setFormatter(formatter)
-    root_logger.addHandler(file_handler)
+    app_logger = logging.getLogger('src')
+    app_logger.setLevel(logging.DEBUG if development else logging.INFO)
+    app_logger.propagate = False
 
-    # Add visual separator when starting new log file
-    root_logger.info("\n" * 10)
-    root_logger.info("=" * 80)
-    root_logger.info("Starting new logging session")
-    root_logger.info("=" * 80)
-    root_logger.info("\n" * 5)
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(CustomFormatter())
+    app_logger.addHandler(file_handler)
 
     logging.captureWarnings(True)
-
-    class StderrToLogger:
-        def __init__(self, logger):
-            self.logger = logger
-        
-        def write(self, buf):
-            for line in buf.rstrip().splitlines():
-                self.logger.error(line.rstrip())
-        
-        def flush(self):
-            pass
+    warnings_logger = logging.getLogger('py.warnings')
+    warnings_logger.addHandler(file_handler)
     
-    stderr_logger = logging.getLogger('STDERR')
-    sys.stderr = StderrToLogger(stderr_logger)
+    app_logger.info("\n" * 2)
+    app_logger.info("=" * 80)
+    app_logger.info("Starting new logging session")
+    app_logger.info("=" * 80)
+    app_logger.info("\n")
+
+    # No stderr redirection needed
     
     # Print instructions for opening logs in new terminal
     # print(f"\nTo view logs in real-time:")

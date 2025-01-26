@@ -37,15 +37,15 @@ class BaseAgent(AgentInterface):
         self,
         config: Dict[str, Any],
         prompt_folder: str,
-        db_interface: DatabaseInterface,
+        db: DatabaseInterface,
         ontology_manager: OntologyManager
     ):
         """Initialize the agent.
         
         Args:
-            config_path: Path to config file
+            config: Configuration dictionary
             prompt_folder: Path to prompt templates folder
-            db_interface: Database interface instance
+            db: Database interface instance
             ontology_manager: Ontology manager instance
             
         Raises:
@@ -66,7 +66,7 @@ class BaseAgent(AgentInterface):
         
         self.env = Environment(loader=FileSystemLoader(prompt_folder))
         
-        self.db_interface = db_interface
+        self.db = db
         self.ontology_manager = ontology_manager
 
         # Initialize tool registry
@@ -98,7 +98,7 @@ class BaseAgent(AgentInterface):
                     module = __import__(module_path, fromlist=[tool_def.class_name])
                     class_ = getattr(module, tool_def.class_name)
                     # Initialize class with any required dependencies
-                    class_instances[module_path] = class_(self.db_interface)
+                    class_instances[module_path] = class_(self.db)
                     
                 instance = class_instances[module_path]
                 self.tool_registry[tool_name] = getattr(instance, func_name)
@@ -138,7 +138,7 @@ class BaseAgent(AgentInterface):
             config_kwargs = {k: v for k, v in kwargs.items() 
                            if k not in ['tools', 'tool_config', 'function_call']}
             
-            response = await self.client.models.generate_content(
+            response = self.client.models.generate_content(
                 model=self.model,
                 contents=contents,
                 config=types.GenerateContentConfig(

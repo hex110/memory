@@ -36,8 +36,6 @@ class PrivacyConfig:
         
         # Load existing config or create default
         self.load_config()
-        
-        logger.debug("PrivacyConfig initialized")
     
     def load_config(self) -> None:
         """Load privacy configuration from file."""
@@ -49,10 +47,8 @@ class PrivacyConfig:
                     for key in self.config:
                         if key in loaded_config:
                             self.config[key] = loaded_config[key]
-                logger.debug("Privacy config loaded from file")
             else:
                 self.save_config()
-                logger.debug("Created default privacy config")
                 
         except Exception as e:
             logger.error(f"Error loading privacy config: {e}")

@@ -30,14 +30,14 @@ class ScreenCapture:
         """
         self.window_manager = window_manager
         self.privacy_config = privacy_config
-        logger.debug("ScreenCapture initialized")
 
     async def capture_and_encode(self) -> Optional[str]:
         """Capture screen, apply privacy filtering, and encode to base64."""
         try:
             # Run screenshot capture in a thread pool since it's CPU-bound
             screenshot = await asyncio.get_event_loop().run_in_executor(
-                None, pyscreenshot.grab, "grim"
+                None,
+                lambda: pyscreenshot.grab(backend="grim")
             )
             
             # Convert to PIL Image for drawing
@@ -52,8 +52,8 @@ class ScreenCapture:
                     x, y = window['position']
                     width, height = window['size']
                     draw.rectangle([(x, y), (x + width, y + height)], fill='black')
-                    logger.debug(f"Applied privacy filter to visible window: {window['class']}")
-            
+                    # logger.debug(f"Applied privacy filter to visible window: {window['class']}")
+
             # Save debug image
             try:
                 debug_path = "debug_screenshots"
@@ -69,7 +69,7 @@ class ScreenCapture:
                 # Write buffer to file asynchronously
                 async with aiofiles.open(debug_file, 'wb') as f:
                     await f.write(buffer.getvalue())
-                logger.debug(f"Saved debug screenshot to {debug_file}")
+                # logger.debug(f"Saved debug screenshot to {debug_file}")
             except Exception as e:
                 logger.warning(f"Failed to save debug screenshot: {e}")
             

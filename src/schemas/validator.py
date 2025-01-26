@@ -15,6 +15,9 @@ from typing import Dict, Any, List, Optional, Union
 import jsonschema
 from src.utils.exceptions import ValidationError
 from src.schemas.definitions import get_database_schema, get_ontology_schema
+from src.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 class SchemaValidator:
     """Validates schemas and data against schemas."""
@@ -245,10 +248,10 @@ class SchemaValidator:
                     field_schema["maxLength"] = field_def["maxLength"]
                 
                 json_schema["properties"][field_name] = field_schema
-            
+
             # Validate basic structure
             jsonschema.validate(data, json_schema)
-            
+        
         except jsonschema.exceptions.ValidationError as e:
             raise ValidationError(f"Invalid data: {e.message}")
         except Exception as e:

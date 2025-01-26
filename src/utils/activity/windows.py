@@ -155,7 +155,7 @@ class WindowManager:
             
             self.running = True
             self._socket_task = asyncio.create_task(self._listen_for_events(socket_path))
-            logger.debug("IPC socket listener started")
+            # logger.debug("IPC socket listener started")
             
         except Exception as e:
             logger.error(f"Failed to setup IPC socket: {e}")
@@ -263,4 +263,4 @@ class WindowManager:
         if self._socket_writer:
             self._socket_writer.close()
             await self._socket_writer.wait_closed()
-        logger.debug("WindowManager cleaned up")
+        # logger.debug("WindowManager cleaned up")

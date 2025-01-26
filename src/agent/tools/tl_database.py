@@ -57,13 +57,13 @@ def track_operation(operation_name: str) -> Callable:
 class DatabaseTools:
     """Implementation of database operation tools."""
     
-    def __init__(self, db_interface: DatabaseInterface):
+    def __init__(self, db: DatabaseInterface):
         """Initialize database tools.
         
         Args:
-            db_interface: Database interface to use for operations
+            db: Database interface to use for operations
         """
-        self.db = db_interface
+        self.db = db
     
     def _format_response(self, data: Any) -> Any:
         """Format database response for JSON serialization.
