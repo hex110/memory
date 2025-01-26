@@ -127,6 +127,7 @@ class MonitorAgent(BaseAgent):
     async def _monitoring_loop(self):
         """Async monitoring loop that collects and stores data periodically."""
         # try:
+        await asyncio.sleep(self.collection_interval)
         while self.is_monitoring:
             try:
                 # Get data from input tracker
@@ -134,8 +135,8 @@ class MonitorAgent(BaseAgent):
 
                 # Capture screenshot
                 screen_data = await self.screen_capture.capture_and_encode()
-                # if screen_data:
-                #     activity_data["screenshot"] = screen_data
+                if screen_data:
+                    activity_data["screenshot"] = screen_data
                 
                 # Store activity data
                 await self._store_activity_data(activity_data)

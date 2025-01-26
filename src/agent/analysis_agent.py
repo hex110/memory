@@ -42,7 +42,7 @@ class AnalysisAgent(BaseAgent):
             self.is_running = False
             self.completed_analyses = 0
 
-            self.collection_interval = self.config.get("activity_log_interval", 30)  # seconds
+            self.collection_interval = self.config["tracking"].get("activity_log_interval", 30)  # seconds
             self.repeat_interval = 10
             
             # self.logger.debug("AnalysisAgent initialization complete", extra={

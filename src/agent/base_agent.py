@@ -138,6 +138,10 @@ class BaseAgent(AgentInterface):
             config_kwargs = {k: v for k, v in kwargs.items() 
                            if k not in ['tools', 'tool_config', 'function_call']}
             
+
+            self.logger.debug("Calling LLM")
+            self.logger.debug(f"Contents: {contents}")
+
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=contents,

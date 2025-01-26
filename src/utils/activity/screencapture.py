@@ -10,7 +10,7 @@ import asyncio
 from typing import Optional, Dict, Any
 
 import pyscreenshot
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from src.utils.activity.windows import WindowManager
 from src.utils.activity.privacy import PrivacyConfig
@@ -43,6 +43,11 @@ class ScreenCapture:
             # Convert to PIL Image for drawing
             img = screenshot if isinstance(screenshot, Image.Image) else Image.fromarray(screenshot)
             draw = ImageDraw.Draw(img)
+
+            try:
+                font = ImageFont.truetype("/usr/share/fonts/OTF/SF-Pro-Rounded-Regular.otf", 128)  # Adjust size as needed
+            except:
+                font = ImageFont.load_default()  # Fallback to default font if unable to load
             
             # Apply privacy filtering only for visible windows
             windows = await self.window_manager.get_windows()
@@ -52,6 +57,23 @@ class ScreenCapture:
                     x, y = window['position']
                     width, height = window['size']
                     draw.rectangle([(x, y), (x + width, y + height)], fill='black')
+
+                    # Prepare the text
+                    class_name = window.get('class', 'Unknown Window')
+                    text = f"Window: {class_name}\nFiltered for privacy"
+                    
+                    # Calculate text size to center it
+                    bbox = draw.textbbox((0, 0), text, font=font)
+                    text_width = bbox[2] - bbox[0]
+                    text_height = bbox[3] - bbox[1]
+                    
+                    # Calculate center position
+                    text_x = x + (width - text_width) // 2
+                    text_y = y + (height - text_height) // 2
+                    
+                    # Draw white text
+                    draw.text((text_x, text_y), text, fill='white', font=font, align='center')
+                    
                     # logger.debug(f"Applied privacy filter to visible window: {window['class']}")
 
             # Save debug image

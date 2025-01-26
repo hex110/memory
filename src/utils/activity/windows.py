@@ -139,6 +139,7 @@ class WindowManager:
             List of dictionaries containing window information
         """
         await self.update_windows()
+        await self.update_active_workspaces()
         return self.windows
     
     async def setup_focus_tracking(self, callback: Callable[[Dict[str, str]], None]) -> None:
