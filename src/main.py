@@ -15,6 +15,7 @@ from src.database.postgresql import PostgreSQLDatabase
 from src.utils.logging import get_logger
 from src.agent.monitor_agent import MonitorAgent
 from src.agent.analysis_agent import AnalysisAgent
+from src.agent.assistant_agent import AssistantAgent
 from src.ontology.manager import OntologyManager
 from uvicorn import Config, Server
 
@@ -43,6 +44,13 @@ class MemorySystemCLI:
         """Create and initialize a new CLI instance."""
         db = await PostgreSQLDatabase.create(config["database"])
         ontology_manager = await OntologyManager.create()
+        assistant = AssistantAgent(
+            config=config,
+            prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
+            db=db,
+            ontology_manager=ontology_manager,
+        )
+        await assistant.start()
         return cls(config, db, ontology_manager)
 
     async def _create_monitor_agent(self):

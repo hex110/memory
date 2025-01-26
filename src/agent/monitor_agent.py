@@ -16,7 +16,7 @@ from src.utils.activity.screencapture import ScreenCapture
 from src.utils.activity.windows import WindowManager
 from src.utils.activity.privacy import PrivacyConfig
 from .base_agent import BaseAgent
-from src.utils.events import ActivityEventSystem, ActivityEvent, ActivityEventType
+from src.utils.events import ActivityEvent, ActivityEventType, EventSystem
 
 class MonitorAgent(BaseAgent):
     def __init__(
@@ -46,7 +46,7 @@ class MonitorAgent(BaseAgent):
             "database.update_entity"
         ]
 
-        self.event_system = ActivityEventSystem()
+        self.event_system = EventSystem()
         
         try:
             # Initialize core services
@@ -55,7 +55,7 @@ class MonitorAgent(BaseAgent):
             self.privacy_config = PrivacyConfig()
             
             # Initialize trackers with dependencies
-            self.input_tracker = InputTracker(self.window_manager, self.privacy_config)
+            self.input_tracker = InputTracker(self.window_manager, self.privacy_config, self.config["hotkeys"])
             # Set up the interrupt callback
             self.input_tracker.set_interrupt_callback(lambda: asyncio.create_task(self.stop_monitoring()))
             
@@ -139,7 +139,7 @@ class MonitorAgent(BaseAgent):
                     activity_data["screenshot"] = screen_data
                 
                 # Store activity data
-                await self._store_activity_data(activity_data)
+                # await self._store_activity_data(activity_data)
                 
                 # Make this cancellable by checking for CancelledError
                 await asyncio.sleep(self.collection_interval)
@@ -184,7 +184,7 @@ class MonitorAgent(BaseAgent):
                     data=storage_data,
                     event_type=ActivityEventType.ACTIVITY_STORED
                 )
-                await self.event_system.broadcaster.broadcast(event)
+                await self.event_system.broadcaster.broadcast_activity(event)
 
             except Exception as e:
                 if "duplicate key" in str(e):

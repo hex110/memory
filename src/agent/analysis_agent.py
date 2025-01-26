@@ -1,3 +1,4 @@
+import base64
 import time
 import threading
 import json
@@ -7,7 +8,7 @@ from datetime import datetime, timedelta
 
 from src.interfaces.postgresql import DatabaseInterface
 from src.ontology.manager import OntologyManager
-from src.utils.events import ActivityEventType, ActivityEvent, ActivityEventSystem
+from src.utils.events import ActivityEventType, ActivityEvent, EventSystem
 from .base_agent import BaseAgent
 
 class AnalysisAgent(BaseAgent):
@@ -38,7 +39,7 @@ class AnalysisAgent(BaseAgent):
             self.available_tools = []
 
             self.session_id = session_id
-            self.event_system = ActivityEventSystem()
+            self.event_system = EventSystem()
             self.is_running = False
             self.completed_analyses = 0
 
@@ -115,11 +116,11 @@ class AnalysisAgent(BaseAgent):
             #     "session_id": self.session_id
             # })
             
-            await self.event_system.broadcaster.subscribe(
+            await self.event_system.broadcaster.subscribe_activity(
                 ActivityEventType.ACTIVITY_STORED,
                 self._handle_activity_stored
             )
-            await self.event_system.broadcaster.subscribe(
+            await self.event_system.broadcaster.subscribe_activity(
                 ActivityEventType.ANALYSIS_STORED,
                 self._handle_analysis_interval
             )
@@ -168,7 +169,7 @@ class AnalysisAgent(BaseAgent):
                     data=analysis,
                     event_type=ActivityEventType.ANALYSIS_STORED
                 )
-                await self.event_system.broadcaster.broadcast(event)
+                await self.event_system.broadcaster.broadcast_activity(event)
                 
                 self.logger.debug("Short term analysis completed and stored")
 
@@ -391,8 +392,16 @@ class AnalysisAgent(BaseAgent):
             total_clicks += record["total_clicks"]
             total_scrolls += record["total_scrolls"]
 
+        # Handle screenshot
+        images = []
         if raw_data[0]["screenshot"]:
-            screenshot_available = True
+            try:
+                screenshot_bytes = base64.b64decode(raw_data[0]["screenshot"])
+                images.append((screenshot_bytes, 'image/png'))
+                screenshot_available = True
+            except Exception as e:
+                self.logger.error(f"Failed to decode screenshot: {e}")
+                screenshot_available = False
         else:
             screenshot_available = False
         
@@ -413,7 +422,8 @@ class AnalysisAgent(BaseAgent):
         llm_response = await self.call_llm(
             prompt=analysis_prompt,
             system_prompt=system_prompt,
-            temperature=0.7
+            temperature=0.7,
+            images=images if images else None
         )
         
         return {

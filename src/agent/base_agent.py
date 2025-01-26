@@ -115,20 +115,43 @@ class BaseAgent(AgentInterface):
         system_prompt: Optional[str] = None,
         tool_behavior: ToolBehavior = ToolBehavior.USE_AND_ANALYZE_OUTPUT_AND_DONE,
         specific_tools: Optional[List[str]] = None,
+        images: Optional[List[tuple[bytes, str]]] = None,  # List of (bytes, mime_type)
+        videos: Optional[List[tuple[bytes, str]]] = None,  # List of (bytes, mime_type)
+        audios: Optional[List[tuple[bytes, str]]] = None,  # List of (bytes, mime_type)
         **kwargs
     ) -> str:
         try:
-            messages = []
+            # Build parts list
+            parts = []
             
-            if isinstance(prompt, str):
-                messages.append({"role": "user", "content": prompt})
-            else:
-                messages.extend(prompt)
+            # Add system prompt if provided
+            if system_prompt:
+                parts.append(types.Part.from_text(system_prompt))
+            
+            # Add media files
+            if images:
+                for image_data, mime_type in images:
+                    parts.append(types.Part.from_bytes(data=image_data, mime_type=mime_type))
+            
+            if videos:
+                for video_data, mime_type in videos:
+                    parts.append(types.Part.from_bytes(data=video_data, mime_type=mime_type))
                 
-            # Convert messages to Gemini format
-            contents = [{"role": m["role"], "parts": [{"text": m["content"]}]} for m in messages]
+            if audios:
+                for audio_data, mime_type in audios:
+                    parts.append(types.Part.from_bytes(data=audio_data, mime_type=mime_type))
             
-            # Configure tools - either use specific_tools or self.available_tools
+            # Add prompt text
+            if isinstance(prompt, str):
+                parts.append(types.Part.from_text(prompt))
+            else:
+                for message in prompt:
+                    parts.append(types.Part.from_text(message["content"]))
+            
+            # Create content
+            contents = [types.Content(role="user", parts=parts)]
+            
+            # Configure tools
             tools = None
             if specific_tools or self.available_tools:
                 from src.schemas.tools_definitions import get_tool_declarations
@@ -137,17 +160,14 @@ class BaseAgent(AgentInterface):
             # Remove tool-related kwargs
             config_kwargs = {k: v for k, v in kwargs.items() 
                            if k not in ['tools', 'tool_config', 'function_call']}
-            
 
             self.logger.debug("Calling LLM")
-            self.logger.debug(f"Contents: {contents}")
 
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=contents,
                 config=types.GenerateContentConfig(
                     temperature=temperature,
-                    system_instruction=system_prompt if system_prompt else None,
                     tools=tools,
                     **config_kwargs
                 )
@@ -157,7 +177,7 @@ class BaseAgent(AgentInterface):
             if hasattr(response, 'candidates') and response.candidates[0].content.parts[0].function_call:
                 return await self._handle_tool_calls(
                     message=response.candidates[0].content,
-                    messages=messages,
+                    messages=[{"role": "user", "content": str(parts)}],
                     tool_behavior=tool_behavior,
                     kwargs=kwargs
                 )

@@ -15,6 +15,7 @@ Interaction Metrics:
 
 {% if screenshot_available %}
 A screenshot of the current state is available for reference.
+You should output "SCREENSHOT: (data)" if you receive a screenshot, where (data) will be "NONE" if you got no screenshot, otherwise it will be what you are able to see in the screenshot that is not covered in the window summaries.
 {% endif %}
 
 {% if previous_logs %}

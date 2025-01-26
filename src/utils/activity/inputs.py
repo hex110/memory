@@ -18,10 +18,12 @@ from typing import Dict, List, Optional, Any, Callable
 import evdev
 from evdev import InputDevice, categorize, ecodes
 
+from src.utils.events import EventBroadcaster
 from src.utils.exceptions import KeyboardTrackingError
 from src.utils.activity.windows import WindowManager
 from src.utils.activity.session import WindowSession
 from src.utils.activity.privacy import PrivacyConfig
+from src.utils.events import HotkeyEvent, HotkeyEventType, EventSystem
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -29,7 +31,7 @@ logger = logging.getLogger(__name__)
 class InputTracker:
     """Tracks keyboard and mouse activity using evdev."""
     
-    def __init__(self, window_manager: WindowManager, privacy_config: PrivacyConfig) -> None:
+    def __init__(self, window_manager: WindowManager, privacy_config: PrivacyConfig, hotkeys: Dict[str, Any]) -> None:
         """Initialize the input tracker.
         
         Args:
@@ -59,6 +61,10 @@ class InputTracker:
         self._total_keys = 0
         self._total_clicks = 0
         self._total_scrolls = 0
+
+        self.pressed_keys = set()
+        self.hotkeys = hotkeys
+        self.event_system = EventSystem()
     
     def set_interrupt_callback(self, callback: Callable[[], None]) -> None:
         """Set callback to be called when Ctrl+C is detected."""
@@ -132,23 +138,7 @@ class InputTracker:
                     async for event in device.async_read_loop():
                         if not self.is_running:
                             break
-                    
-                        # Allow other coroutines to run
-                        await asyncio.sleep(0)
 
-                        # Check for Ctrl+C
-                        if (event.type == evdev.ecodes.EV_KEY and 
-                            event.code == evdev.ecodes.KEY_C and 
-                            event.value == 1):  # Key press
-                            
-                            # Check if Ctrl is held down
-                            active_keys = device.active_keys()
-                            if evdev.ecodes.KEY_LEFTCTRL in active_keys or evdev.ecodes.KEY_RIGHTCTRL in active_keys:
-                                logger.info("Ctrl+C detected, stopping monitoring...")
-                                self.is_running = False
-                                asyncio.create_task(self.stop())
-                                break
-                        
                         # Check if we should track this event
                         if self._should_track_callback and not self._should_track_callback():
                             continue
@@ -160,8 +150,34 @@ class InputTracker:
                         # Skip if current window is private
                         if self.privacy_config.is_private(self.current_session.window_info):
                             continue
+                            
 
                         if event.type == evdev.ecodes.EV_KEY:
+                            
+                            # Hotkey detection
+                            key_name = evdev.ecodes.keys.get(event.code)
+                            # logger.debug(f"Key name: {key_name}")
+                            if key_name and key_name in self.hotkeys["speak_hotkey"]:
+                                # Track key state
+                                if event.value == 1:  # Press
+                                    self.pressed_keys.add(key_name)
+                                    
+                                    # Check for hotkey combination
+                                    speak_hotkey = set(self.hotkeys["speak_hotkey"])
+                                    if self.pressed_keys.issuperset(speak_hotkey):
+                                        # logger.debug("Hotkey detected")
+                                        await self.event_system.broadcaster.broadcast_hotkey(
+                                            HotkeyEvent(
+                                                timestamp=datetime.now().isoformat(),
+                                                hotkey_type=HotkeyEventType.SPEAK
+                                            )
+                                        )
+                                
+                                elif event.value == 0:  # Release
+                                    self.pressed_keys.discard(key_name)
+                            
+
+                            
                             timestamp = datetime.now().isoformat()
                             
                             # Handle mouse buttons (BTN_LEFT to BTN_TASK)
@@ -180,7 +196,7 @@ class InputTracker:
                                 if key_name.startswith("KEY_"):
                                     event_type = ("press" if event.value == 1 else 
                                                 "release" if event.value == 0 else "hold")
-                                    
+
                                     if event_type == "press":
                                         self._total_keys += 1
                                         # Convert key names to more readable format

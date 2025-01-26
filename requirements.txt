@@ -15,3 +15,6 @@ InquirerPy
 asyncio
 asyncpg
 aiofiles
+sounddevice
+soundfile
+numpy

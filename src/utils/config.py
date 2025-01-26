@@ -24,7 +24,10 @@ def get_default_config() -> Dict[str, Any]:
         },
         "tracking": {
             "activity_log_interval": 30
-        }
+        },
+        "hotkeys": {
+            "speak_hotkey": ["KEY_LEFTCTRL", "KEY_X"]
+        },
     }
 
 def load_env_vars():
