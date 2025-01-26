@@ -33,7 +33,9 @@ class AssistantAgent(BaseAgent):
 
         try:
             # Set available tools for this agent
-            self.available_tools = []
+            self.available_tools = [
+                "spotify.spotify_control"
+            ]
 
             self.event_system = EventSystem()
             
@@ -170,7 +172,7 @@ class AssistantAgent(BaseAgent):
             # assistant_prompt = self.load_prompt("assistant", context)
 
             llm_response = await self.call_llm(
-                prompt="Please transcribe this audio and respond appropriately.",
+                prompt="My request is in the audio message.",
                 system_prompt=system_prompt,
                 temperature=0.7,
                 audios=audios

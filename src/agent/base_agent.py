@@ -23,6 +23,7 @@ from src.interfaces.agent import AgentInterface
 from src.interfaces.postgresql import DatabaseInterface
 from src.ontology.manager import OntologyManager
 from src.utils.logging import get_logger
+from src.schemas.tools_definitions import get_tool_implementations
 
 class ToolBehavior(Enum):
     """Controls how tools are used and their outputs handled."""
@@ -73,35 +74,51 @@ class BaseAgent(AgentInterface):
         self.tool_registry = {}
         self.available_tools = []  # List of tool names this agent can use
         
-        # Load tool implementations
-        self._load_tool_implementations()
+        self._tools_loaded = False
     
+    def _ensure_tools_loaded(self):
+        """Ensures tools are loaded before they're accessed."""
+        if not self._tools_loaded:
+            self._load_tool_implementations()
+            self._tools_loaded = True
+
     def _load_tool_implementations(self):
         """Load implementations for available tools."""
-        from src.schemas.tools_definitions import get_tool_implementations
         
+        
+        # self.logger.debug(f"Available tools: {self.available_tools}")
         implementations = get_tool_implementations(self.available_tools)
         class_instances = {}  # Cache for class instances
         
+
+        # self.logger.debug(f"Implementations: {implementations}")
         for tool_name, tool_def in implementations.items():
+            # Strip module prefix when registering the tool
+            simple_name = tool_name.split('.')[-1]
             module_name, func_name = tool_def.implementation.split(".")
             module_path = f"src.agent.tools.tl_{module_name}"
+            
+            # self.logger.debug(f"Module path: {module_path}")
+            # self.logger.debug(f"Function name: {func_name}")
             
             if tool_def.implementation_type == "function":
                 # Load function directly from module
                 module = __import__(module_path, fromlist=[func_name])
-                self.tool_registry[tool_name] = getattr(module, func_name)
+                self.tool_registry[simple_name] = getattr(module, func_name)
                 
             elif tool_def.implementation_type == "method":
-                # Load method from class instance
+                # Only initialize class with db if it's a database tool
                 if module_path not in class_instances:
                     module = __import__(module_path, fromlist=[tool_def.class_name])
                     class_ = getattr(module, tool_def.class_name)
-                    # Initialize class with any required dependencies
-                    class_instances[module_path] = class_(self.db)
-                    
+                    # Initialize with db only for database tools
+                    if tool_def.category == "database":
+                        class_instances[module_path] = class_(self.db)
+                    else:
+                        class_instances[module_path] = class_()
+                        
                 instance = class_instances[module_path]
-                self.tool_registry[tool_name] = getattr(instance, func_name)
+                self.tool_registry[simple_name] = getattr(instance, func_name)
     
     def load_prompt(self, prompt_name: str, context: Dict[str, Any]) -> str:
         """Load and render a prompt template."""
@@ -115,12 +132,23 @@ class BaseAgent(AgentInterface):
         system_prompt: Optional[str] = None,
         tool_behavior: ToolBehavior = ToolBehavior.USE_AND_ANALYZE_OUTPUT_AND_DONE,
         specific_tools: Optional[List[str]] = None,
+        message_history: Optional[List[Dict[str, Any]]] = None,
         images: Optional[List[tuple[bytes, str]]] = None,  # List of (bytes, mime_type)
         videos: Optional[List[tuple[bytes, str]]] = None,  # List of (bytes, mime_type)
         audios: Optional[List[tuple[bytes, str]]] = None,  # List of (bytes, mime_type)
         **kwargs
     ) -> str:
         try:
+            contents = []
+        
+            # Add message history if provided
+            if message_history:
+                for msg in message_history:
+                    contents.append(types.Content(
+                        role=msg["role"],
+                        parts=[types.Part.from_text(msg["content"])]
+                    ))
+
             # Build parts list
             parts = []
             
@@ -141,15 +169,17 @@ class BaseAgent(AgentInterface):
                 for audio_data, mime_type in audios:
                     parts.append(types.Part.from_bytes(data=audio_data, mime_type=mime_type))
             
-            # Add prompt text
+           # Add the new prompt
             if isinstance(prompt, str):
                 parts.append(types.Part.from_text(prompt))
+                messages = [{"role": "user", "content": prompt}]
             else:
                 for message in prompt:
                     parts.append(types.Part.from_text(message["content"]))
+                messages = prompt
             
             # Create content
-            contents = [types.Content(role="user", parts=parts)]
+            contents.append(types.Content(role="user", parts=parts))
             
             # Configure tools
             tools = None
@@ -175,13 +205,15 @@ class BaseAgent(AgentInterface):
             
             # Check for function calls
             if hasattr(response, 'candidates') and response.candidates[0].content.parts[0].function_call:
+                self.logger.debug(f"Function call: {response.candidates[0].content.parts[0].function_call}")
                 return await self._handle_tool_calls(
                     message=response.candidates[0].content,
-                    messages=[{"role": "user", "content": str(parts)}],
+                    messages=messages,
                     tool_behavior=tool_behavior,
                     kwargs=kwargs
                 )
-                
+            
+            # self.logger.debug(f"Response: {response.text}")
             return response.text
             
         except Exception as e:
@@ -194,6 +226,8 @@ class BaseAgent(AgentInterface):
         tool_behavior: ToolBehavior,
         kwargs: Dict[str, Any]
     ) -> str:
+        self._ensure_tools_loaded()
+        
         # Extract the function call details
         function_call = message.parts[0].function_call
         
@@ -206,39 +240,51 @@ class BaseAgent(AgentInterface):
                 "arguments": function_call.args
             }
         })
-        
+
         try:
             # Get and call the tool implementation
+            # self.logger.debug(f"Calling tool: {function_call.name}")
+            # self.logger.debug(f"Tool registry: {self.tool_registry[function_call.name]}")
             function = self.tool_registry[function_call.name]
             function_response = await function(**function_call.args)
             
             # Convert function response to string if needed
             if not isinstance(function_response, str):
                 function_response = json.dumps(function_response)
+            
+            if tool_behavior == ToolBehavior.USE_AND_DONE:
+                return function_response
+        
+            # Add tool response to message history
+            messages.append({"role": "tool", "content": function_response})
+
+            contents = []
+            for m in messages[:-2]:  # Convert previous messages
+                contents.append(types.Content(
+                    role=m["role"],
+                    parts=[types.Part.from_text(m["content"])]
+                ))
                 
-            # Create tool response content
+            # Add function call and response in the format expected by Gemini
+            contents.append(message)  # Function call content
             function_response_part = types.Part.from_function_response(
                 name=function_call.name,
                 response={"result": function_response}
             )
-            tool_content = types.Content(role="tool", parts=[function_response_part])
-            
-            if tool_behavior == ToolBehavior.USE_AND_DONE:
-                return function_response
-                
-            # Add tool response to messages and convert all to Gemini format
-            messages.append({"role": "tool", "content": function_response})
-            contents = [{"role": m["role"], "parts": [{"text": m["content"]}]} for m in messages]
+            contents.append(types.Content(
+                role="tool", 
+                parts=[function_response_part]
+            ))
             
             if tool_behavior == ToolBehavior.USE_AND_ANALYZE_OUTPUT_AND_DONE:
-                response = await self.client.models.generate_content(
+                response = self.client.models.generate_content(
                     model=self.model,
                     contents=contents
                 )
                 return response.text
                 
             else:  # KEEP_USING_UNTIL_DONE
-                response = await self.client.models.generate_content(
+                response = self.client.models.generate_content(
                     model=self.model,
                     contents=contents,
                     config=types.GenerateContentConfig(

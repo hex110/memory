@@ -70,3 +70,6 @@ instructions.txt
 debug_screenshots/
 debug_recordings/
 recordings/
+
+# Spotify
+token_store.json

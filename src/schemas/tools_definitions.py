@@ -127,6 +127,42 @@ TOOL_REGISTRY = {
             "Use update_entity to modify existing records. Only provided fields will be updated. "
             "The entity must exist and data must conform to schema requirements."
         )
+    ),
+
+    "spotify.spotify_control": ToolDefinition(
+        name="spotify_control",
+        description="Control Spotify playback and manage your library",
+        parameters={
+            "action": {
+                "type": "STRING",
+                "description": "The action to perform",
+                "enum": [
+                    "play", "pause", "next", "previous", "like", 
+                    "unlike", "like_current", "unlike_current",
+                    "play_saved_tracks", "get_playlists", "play_playlist"
+                ]
+            },
+            "track_id": {
+                "type": "STRING", 
+                "description": "The Spotify ID of the track (required for 'like' and 'unlike')"
+            },
+            "playlist_id": {
+                "type": "STRING",
+                "description": "The Spotify ID of the playlist (required for 'play_playlist')"
+            }
+        },
+        required_params=["action"],
+        category="spotify",
+        implementation="spotify.handle_spotify_action",
+        implementation_type="function",
+        prompt_hint=(
+            "You can control Spotify playback and manage the user's library. "
+        "Available actions: 'play', 'pause', 'next', 'previous', 'like_current', 'unlike_current', 'play_saved_tracks', 'get_playlists', 'play_playlist'. "
+        "For 'like' and 'unlike', provide a 'track_id'. "
+        "For 'play_playlist', provide a 'playlist_id'. "
+        "Use 'get_playlists' to get a list of playlists first. "
+            "Use 'like_current' or 'unlike_current' to like or unlike the currently playing song, respectively."
+        )
     )
 }
 
