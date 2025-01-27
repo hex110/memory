@@ -14,6 +14,7 @@ import logging
 from datetime import datetime
 import select
 from typing import Dict, List, Optional, Any, Callable
+from collections import deque
 
 import evdev
 from evdev import InputDevice, categorize, ecodes
@@ -42,6 +43,10 @@ class InputTracker:
         self.current_session: Optional[WindowSession] = None
         self.pending_sessions: List[WindowSession] = []
         
+        # Add new buffer for recent sessions
+        self.recent_sessions = deque(maxlen=30)  # Keep last 30 seconds worth
+        self.should_persist = False
+        
         # Tracking state
         self.devices: List[InputDevice] = []
         self.is_running = False
@@ -65,6 +70,8 @@ class InputTracker:
         self.pressed_keys = set()
         self.hotkeys = hotkeys
         self.event_system = EventSystem()
+
+        # logger.debug(f"InputTracker initialized with hotkeys: {hotkeys}")
     
     def set_interrupt_callback(self, callback: Callable[[], None]) -> None:
         """Set callback to be called when Ctrl+C is detected."""
@@ -84,6 +91,14 @@ class InputTracker:
         }
         return button_map.get(code, f"Button.{code}")
     
+    async def enable_persistence(self) -> None:
+        """Enable saving sessions to pending_sessions."""
+        self.should_persist = True
+
+    async def disable_persistence(self) -> None:
+        """Disable saving sessions to pending_sessions."""
+        self.should_persist = False
+
     async def _on_window_focus_change(self, window_info: Dict[str, str]) -> None:
         """Handle window focus changes.
         
@@ -96,11 +111,14 @@ class InputTracker:
         if self.current_session:
             await self.current_session.end_session(now)
             
-            # Only add non-private sessions to pending
-            if not self.privacy_config.is_private(window_info):
+            # Always add to recent buffer
+            self.recent_sessions.append(self.current_session)
+            
+            # Only add to pending if persistence enabled and not private
+            if self.should_persist and not self.privacy_config.is_private(window_info):
                 self.pending_sessions.append(self.current_session)
-            else:
-                logger.debug(f"Skipping private session for {window_info['class']}")
+            # else:
+            #     logger.debug(f"Skipping persistence for session with {window_info['class']}")
 
         # Start new session
         self.current_session = WindowSession(window_info, now)
@@ -387,3 +405,18 @@ class InputTracker:
             await self._on_window_focus_change(current_window)
 
         return events
+
+    async def get_recent_sessions(self, seconds: int = 60) -> List[WindowSession]:
+        """Get recent sessions from buffer.
+        
+        Args:
+            seconds: Number of seconds of history to return
+            
+        Returns:
+            List of recent WindowSession objects
+        """
+        now = datetime.now()
+        return [
+            session for session in self.recent_sessions
+            if (now - session.end_time).total_seconds() <= seconds
+        ]

@@ -73,3 +73,6 @@ recordings/
 
 # Spotify
 token_store.json
+responses/
+
+temp.mp4

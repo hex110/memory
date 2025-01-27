@@ -1,17 +1,26 @@
 """Assistant agent implementation."""
 
 import asyncio
+from collections.abc import AsyncIterable
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from pathlib import Path
 import os
 
 from google.genai import types
+import io
+import sounddevice as sd
+import numpy as np
+from pydub import AudioSegment
+
 
 from src.interfaces.postgresql import DatabaseInterface
 from src.ontology.manager import OntologyManager
 from src.utils.events import HotkeyEvent, HotkeyEventType, EventSystem
 from src.utils.activity.audio import AudioRecorder
+from src.utils.activity.inputs import InputTracker
+from src.utils.activity.screencapture import ScreenCapture
+from src.utils.tts import TTSEngine
 from .base_agent import BaseAgent
 
 class AssistantAgent(BaseAgent):
@@ -22,7 +31,9 @@ class AssistantAgent(BaseAgent):
         config: Dict[str, Any],
         prompt_folder: str,
         db: DatabaseInterface,
-        ontology_manager: OntologyManager
+        ontology_manager: OntologyManager,
+        input_tracker: InputTracker,
+        screen_capture: ScreenCapture
     ):
         super().__init__(
             config=config,
@@ -32,20 +43,24 @@ class AssistantAgent(BaseAgent):
         )
 
         try:
-            # Set available tools for this agent
+            # Add references to trackers
+            self.input_tracker = input_tracker
+            self.screen_capture = screen_capture
+
             self.available_tools = [
                 "spotify.spotify_control"
             ]
 
             self.event_system = EventSystem()
             
-            # State tracking
             self.is_running = False
             self.is_recording = False
             
-            # Initialize audio recorder
             self.audio_recorder = AudioRecorder()
             self.current_recording_path = None
+
+            self.tts_engine = TTSEngine()
+            self.audio_player = AudioPlayer()
             
             self.logger.info("AssistantAgent initialized successfully")
             
@@ -88,6 +103,12 @@ class AssistantAgent(BaseAgent):
                 
                 # Cleanup audio recorder
                 await self.audio_recorder.cleanup()
+
+                # Cleanup TTS engine
+                await self.tts_engine.cleanup()
+                
+                # Cleanup audio player
+                self.audio_player.cleanup()
                 
                 self.logger.info("AssistantAgent stopped successfully")
         except Exception as e:
@@ -144,6 +165,26 @@ class AssistantAgent(BaseAgent):
             })
             raise
 
+    async def _get_recent_context(self) -> str:
+        """Get formatted string of recent activity context."""
+        try:
+            recent_sessions = await self.input_tracker.get_recent_sessions(seconds=30)
+            
+            context = "For context, here is what I was doing before calling for assistance:\n\n"
+            
+            for session in recent_sessions:
+                context += f"Window: {session.window_info['class']} - {session.window_info['title']}\n"
+                context += f"From {session.start_time.strftime('%H:%M:%S')} to {session.end_time.strftime('%H:%M:%S')}\n"
+                context += f"Activity: {session.key_count} keys, {session.click_count} clicks, {session.scroll_count} scrolls\n\n"
+            
+            return context
+            
+        except Exception as e:
+            self.logger.error("Failed to get recent context", extra={
+                "error": str(e)
+            })
+            return "Could not retrieve recent activity context."
+
     async def _process_request(self):
         """Process voice input and generate response."""
         if not self.current_recording_path:
@@ -151,39 +192,50 @@ class AssistantAgent(BaseAgent):
             return
 
         try:
-            # Prepare audio data
+            # Get audio data
             audios = []
             with open(self.current_recording_path, 'rb') as f:
                 audio_bytes = f.read()
                 audios.append((audio_bytes, 'audio/wav'))
 
-            # Get recent context
-            recent_responses = await self._get_recent_responses()
-            
-            # Prepare context for LLM
-            # context = {
-            #     "transcribed_text": transcribed_text,
-            #     "previous_responses": recent_responses,
-            #     "timestamp": datetime.now().isoformat()
-            # }
-            
-            # Get LLM response
+            # Get system prompt
             system_prompt = self.load_prompt("assistant_system", context={})
-            # assistant_prompt = self.load_prompt("assistant", context)
+            
+            # Get recent context and video
+            context = await self._get_recent_context()
+            videos = []
+            video_buffer = await self.screen_capture.get_video_buffer()
+            if video_buffer:
+                videos.append((video_buffer, 'video/mp4'))
 
+            # Build user prompt with context
+            user_prompt = f"{context}\n\nMy request is in the audio message."
+
+            self.logger.debug(f"User prompt: {user_prompt}")
+
+            # Get LLM response
             llm_response = await self.call_llm(
-                prompt="My request is in the audio message.",
+                prompt=user_prompt,
                 system_prompt=system_prompt,
                 temperature=0.7,
-                audios=audios
+                audios=audios,
+                videos=videos
             )
-            
-            # Store response
-            # await self._store_response(llm_response)
             
             # Log response to terminal
             self.logger.debug(f"\nAssistant: {llm_response}")
             
+            # --- Modified part: Use non-streaming TTS and play the file ---
+            audio_file_path = await self.tts_engine.synthesize_speech(llm_response)
+            
+            if audio_file_path:
+                await self.audio_player.play_file(audio_file_path)
+                # Clean up audio file
+                os.remove(audio_file_path)
+            else:
+                self.logger.error("TTS synthesis failed, no audio generated")
+            # --- End of modification ---
+
             # Clear current recording path
             self.current_recording_path = None
             
@@ -236,3 +288,61 @@ class AssistantAgent(BaseAgent):
                 "error": str(e)
             })
             raise
+
+class AudioPlayer:
+    def __init__(self):
+      self.stream = None
+
+    async def play_stream(self, audio_iterator: AsyncIterable[bytes]):
+        """Play audio chunks as they arrive."""
+        try:
+           first_chunk = True
+           async for chunk in audio_iterator:
+              if first_chunk:
+                  # Convert first MP3 chunk to get format info
+                  audio = AudioSegment.from_mp3(io.BytesIO(chunk))
+                  sample_rate = audio.frame_rate
+                  channels = audio.channels
+                  first_chunk = False
+                  
+              # Convert MP3 chunk to raw audio data
+              audio = AudioSegment.from_mp3(io.BytesIO(chunk))
+              raw_data = audio.raw_data
+            
+              # Convert raw audio data to numpy array
+              np_array = np.frombuffer(raw_data, dtype=np.int16)
+              
+              # Reshape numpy array to handle channels
+              np_array = np_array.reshape(-1, channels)
+              
+              # Play the chunk
+              sd.play(np_array, sample_rate, blocking=False)
+              
+           sd.wait()
+
+        except Exception as e:
+            print(f"Error in play_stream: {e}")
+
+    async def play_file(self, file_path):
+        try:
+             audio = AudioSegment.from_file(file_path)
+             sample_rate = audio.frame_rate
+             channels = audio.channels
+             
+             raw_data = audio.raw_data
+            
+             # Convert raw audio data to numpy array
+             np_array = np.frombuffer(raw_data, dtype=np.int16)
+              
+             # Reshape numpy array to handle channels
+             np_array = np_array.reshape(-1, channels)
+             
+             # Play the chunk
+             sd.play(np_array, sample_rate, blocking=True)
+             sd.wait()
+
+        except Exception as e:
+            print(f"Error in play_file: {e}")
+
+    def cleanup(self):
+      pass #Do nothing

@@ -19,3 +19,5 @@ sounddevice
 soundfile
 numpy
 opencv-python
+google-cloud-texttospeech
+pydub

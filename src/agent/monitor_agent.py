@@ -80,16 +80,17 @@ class MonitorAgent(BaseAgent):
             raise
     
     async def start_monitoring(self):
-        """Start the activity monitoring process."""
+        """Start activity tracking."""
         try:
-            # self.logger.debug("Starting activity monitoring")
-            
             if not self.is_monitoring:
-                # self.logger.debug("Starting input tracker")
-                await self.input_tracker.start()
+                # Start input tracker if not already running
+                if not self.input_tracker.is_running:
+                    await self.input_tracker.start()
+                
+                # Enable persistence
+                await self.input_tracker.enable_persistence()
                 
                 self.is_monitoring = True
-                # Store the task reference
                 self.monitor_task = asyncio.create_task(self._monitoring_loop())
                 
                 self.logger.info("Activity monitoring started")
@@ -98,28 +99,24 @@ class MonitorAgent(BaseAgent):
             raise
     
     async def stop_monitoring(self):
-        """Stop the activity monitoring process."""
+        """Stop activity tracking."""
         try:
-            # self.logger.debug("Stopping activity monitoring")
-            
-            self.is_monitoring = False
-            
-            # Cancel the monitoring task if it exists
-            if self.monitor_task:
-                self.monitor_task.cancel()
-                try:
-                    await self.monitor_task
-                except asyncio.CancelledError:
-                    pass
-                self.monitor_task = None
-            
-            # Cleanup trackers
-            # self.logger.debug("Cleaning up trackers")
-            await self.input_tracker.stop()
-            await self.screen_capture.cleanup()
-            await self.window_manager.cleanup()
-            
-            self.logger.info("Activity monitoring stopped")
+            if self.is_monitoring:
+                self.is_monitoring = False
+                
+                # Cancel the monitoring task if it exists
+                if self.monitor_task:
+                    self.monitor_task.cancel()
+                    try:
+                        await self.monitor_task
+                    except asyncio.CancelledError:
+                        pass
+                    self.monitor_task = None
+                
+                # Disable persistence but keep tracking running
+                await self.input_tracker.disable_persistence()
+                
+                self.logger.info("Activity monitoring stopped")
         except Exception as e:
             self.logger.error(f"Failed to stop monitoring: {e}")
             raise

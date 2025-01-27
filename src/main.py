@@ -17,6 +17,10 @@ from src.agent.monitor_agent import MonitorAgent
 from src.agent.analysis_agent import AnalysisAgent
 from src.agent.assistant_agent import AssistantAgent
 from src.ontology.manager import OntologyManager
+from src.utils.activity.windows import WindowManager
+from src.utils.activity.privacy import PrivacyConfig
+from src.utils.activity.inputs import InputTracker
+from src.utils.activity.screencapture import ScreenCapture
 from uvicorn import Config, Server
 
 class MemorySystemCLI:
@@ -26,7 +30,7 @@ class MemorySystemCLI:
         """Initialize the CLI interface."""
         self.config = config
         self.db = db
-        self.tracking_active = False
+        self.tracking_active = False  # Now means persistence is active
         self.server_active = False
         self.tracking_task = None
         self.server_task = None
@@ -39,46 +43,66 @@ class MemorySystemCLI:
         self.responses_dir.mkdir(exist_ok=True)
         self.config_path = Path("config.json")
 
+        # Add new fields for core components
+        self.window_manager = None
+        self.privacy_config = None
+        self.input_tracker = None
+        self.screen_capture = None
+
     @classmethod
     async def create(cls, config: Dict[str, Any]) -> 'MemorySystemCLI':
         """Create and initialize a new CLI instance."""
         db = await PostgreSQLDatabase.create(config["database"])
         ontology_manager = await OntologyManager.create()
-        assistant = AssistantAgent(
+
+        # Create instance
+        cli = cls(config, db, ontology_manager)
+        
+        # Initialize core components
+        cli.window_manager = WindowManager()
+        cli.privacy_config = PrivacyConfig()
+        cli.input_tracker = InputTracker(cli.window_manager, cli.privacy_config, config["hotkeys"])
+        cli.screen_capture = ScreenCapture(cli.window_manager, cli.privacy_config)
+        
+        # Start background tracking
+        await cli.input_tracker.start()
+        await cli.screen_capture.start_recording()
+        
+        # Create agents with components
+        cli.monitor_agent = MonitorAgent(
             config=config,
             prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
             db=db,
             ontology_manager=ontology_manager,
-        )
-        await assistant.start()
-        return cls(config, db, ontology_manager)
-
-    async def _create_monitor_agent(self):
-        return MonitorAgent(
-            config=self.config,
-            prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
-            db=self.db,
-            ontology_manager=self.ontology_manager,
             session_id=str(uuid.uuid4())
         )
-
-    async def _create_analysis_agent(self, session_id: str):
-        return AnalysisAgent(
-            config=self.config,
+        
+        cli.analysis_agent = AnalysisAgent(
+            config=config,
             prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
-            db=self.db,
-            ontology_manager=self.ontology_manager,
-            session_id=session_id
+            db=db,
+            ontology_manager=ontology_manager,
+            session_id=cli.monitor_agent.session_id
+        )
+        
+        cli.assistant_agent = AssistantAgent(
+            config=config,
+            prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
+            db=db,
+            ontology_manager=ontology_manager,
+            input_tracker=cli.input_tracker,
+            screen_capture=cli.screen_capture
         )
 
+        await cli.assistant_agent.start()
+
+        return cli
+
     async def _start_tracking(self):
-        """Start activity tracking."""
+        """Start activity tracking (enable persistence)."""
         try:
             if not self.tracking_active:
                 self.logger.info("Starting activity tracking")
-                self.monitor_agent = await self._create_monitor_agent()
-                self.analysis_agent = await self._create_analysis_agent(self.monitor_agent.session_id)
-                
                 await self.monitor_agent.start_monitoring()
                 await self.analysis_agent.start_analysis_cycles()
                 self.tracking_active = True
@@ -87,7 +111,7 @@ class MemorySystemCLI:
             raise
 
     async def _stop_tracking(self):
-        """Stop activity tracking."""
+        """Stop activity tracking (disable persistence)."""
         try:
             if self.tracking_active:
                 self.logger.info("Stopping activity tracking")
@@ -251,14 +275,17 @@ class MemorySystemCLI:
                         choices=self.get_choices(),
                         default=None
                     ).execute_async()
-                        
+                    
+                    self.logger.info(f"Choice: {choice}")
                     if choice == "Exit":
+                        self.logger.info("Exiting")
                         if self.tracking_active or self.server_active:
                             confirm = await inquirer.confirm(
                                 message="Active processes will be stopped. Continue?"
                             ).execute_async()
                             if not confirm:
                                 continue
+                        self.logger.info("Cleaning up resources")
                         await self.cleanup()
                         break
                         
@@ -276,14 +303,26 @@ class MemorySystemCLI:
             await self.cleanup()
     
     async def cleanup(self):
+        """Cleanup resources."""
         self.logger.info("Starting cleanup process")
         try:
+            await self.assistant_agent.stop()
+
             if self.tracking_active:
                 self.logger.debug("Stopping tracking")
                 await self._stop_tracking()
             if self.server_active:
                 self.logger.debug("Stopping server")
                 await self._stop_server()
+                
+            # Add cleanup for core components
+            if self.input_tracker:
+                self.logger.debug("Stopping input tracker")
+                await self.input_tracker.stop()
+            if self.screen_capture:
+                self.logger.debug("Stopping screen capture")
+                await self.screen_capture.cleanup()
+                
             if self.db:
                 self.logger.debug("Closing database connection")
                 await self.db.close()
