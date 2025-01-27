@@ -139,7 +139,7 @@ class MonitorAgent(BaseAgent):
                     activity_data["screenshot"] = screen_data
                 
                 # Store activity data
-                # await self._store_activity_data(activity_data)
+                await self._store_activity_data(activity_data)
                 
                 # Make this cancellable by checking for CancelledError
                 await asyncio.sleep(self.collection_interval)

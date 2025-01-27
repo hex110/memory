@@ -1,7 +1,8 @@
 {
     "always_private": [
         "signal",
-        "telegram"
+        "telegram",
+        "discord"
     ],
     "current_private": []
 }

@@ -14,8 +14,7 @@ Interaction Metrics:
 - Scrolls: {{total_scrolls}}
 
 {% if screenshot_available %}
-A screenshot of the current state is available for reference.
-You should output "SCREENSHOT: (data)" if you receive a screenshot, where (data) will be "NONE" if you got no screenshot, otherwise it will be what you are able to see in the screenshot that is not covered in the window summaries.
+A screenshot of the user's current monitors is available to you for more context about what they are doing.
 {% endif %}
 
 {% if previous_logs %}

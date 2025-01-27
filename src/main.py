@@ -153,23 +153,30 @@ class MemorySystemCLI:
     async def _analyze_session(self):
         """Handle session analysis workflow."""
         prompt = await inquirer.text(
-            message="Enter your analysis prompt:"
+            message="Enter your analysis prompt (or press Enter for default analysis):"
         ).execute_async()
         
-        if not prompt:
-            return
-            
         analysis_file = self.responses_dir / "analysis.txt"
         try:
-            await analyze_session(
-                self.config,
-                self.db,
-                custom_prompt=prompt,
-                output_file=analysis_file
+            if not self.analysis_agent:
+                self.analysis_agent = await self._create_analysis_agent("")
+
+            # Call analyze_session with optional custom prompt
+            analysis_result = await self.analysis_agent.analyze_session(
+                session_id = None,
+                custom_prompt=prompt if prompt else None
             )
             
-            if analysis_file.exists():
+            if analysis_result:
+                # Write analysis to file
+                with open(analysis_file, 'w', encoding='utf-8') as f:
+                    f.write(analysis_result["analysis"])
+                    
+                # Open the file with system's default application
                 self.open_file(analysis_file)
+            else:
+                print("No data available for analysis.")
+        
         except Exception as e:
             self.logger.error("Analysis failed", {"error": str(e)})
 
@@ -188,6 +195,7 @@ class MemorySystemCLI:
 
         choices.extend([
             "Analyze Session",
+            "Open Observation Log",
             "Exit"
         ])
         return choices
@@ -206,6 +214,8 @@ class MemorySystemCLI:
                 message = "Stopping server..."
             elif choice == "Analyze Session":
                 message = "Analyzing session..."
+            elif choice == "Open Observation Log":
+                message = "Opening observation log..."
             
             if message:
                 print(f"{message}")
@@ -220,6 +230,8 @@ class MemorySystemCLI:
                 await self._stop_server()
             elif choice == "Analyze Session":
                 await self._analyze_session()
+            elif choice == "Open Observation Log":
+                self.open_file(Path("responses/responses.txt"))
                 
             # Add a newline after operation completes
             if message:

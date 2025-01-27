@@ -1,4 +1,5 @@
 import base64
+from pathlib import Path
 import time
 import threading
 import json
@@ -99,6 +100,7 @@ class AnalysisAgent(BaseAgent):
                 final_analysis = await self.analyze_session(self.session_id)
                 if final_analysis:
                     await self._store_analysis(final_analysis, "final")
+                    await self.save_responses_to_files()
                     # self.logger.info("Final analysis completed", extra={
                     #     "session_id": self.session_id
                     # })
@@ -494,6 +496,20 @@ class AnalysisAgent(BaseAgent):
         custom_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
         """Analyze an entire session."""
+
+        if not session_id:
+            # Get the last session ID from the database
+            last_sessions = await self.db.query_entities(
+                "activity_raw",
+                query={},
+                sort_by="created_at",
+                sort_order="desc",
+                limit=1
+            )
+            if not last_sessions:
+                return None
+            session_id = last_sessions[0]["session_id"]
+        
         # Get all analyses for the session
         query = {"session_id": session_id, "analysis_type": "special"}
         special_analyses = await self.db.query_entities(
@@ -556,3 +572,60 @@ class AnalysisAgent(BaseAgent):
             "source_ids": [record["id"] for record in raw_data],
             "analysis": llm_response
         }
+    
+    async def save_responses_to_files(self):
+        """Save all analyses for the session to separate files."""
+        # Get all analyses for the session
+        query = {"session_id": self.session_id}
+        analyses = await self.db.query_entities(
+            "activity_analysis",
+            query,
+            sort_by="start_timestamp",
+            sort_order="asc"
+        )
+        
+        # Check if session is ongoing
+        latest_activity = await self.db.query_entities(
+            "activity_raw",
+            {"session_id": self.session_id},
+            sort_by="created_at",
+            sort_order="desc",
+            limit=1
+        )
+        
+        latest_time = latest_activity[0]["created_at"]
+        is_ongoing = (datetime.now().timestamp() - latest_time.timestamp()) < 60 if latest_activity else False
+        session_status = "[ONGOING SESSION]" if is_ongoing else "[COMPLETED SESSION]"
+        
+        # Prepare files
+        responses_dir = Path("responses")
+        responses_dir.mkdir(exist_ok=True)
+        
+        for analysis in analyses:
+            analysis["end_timestamp"] = analysis["created_at"]
+        analyses.sort(key=lambda x: x["end_timestamp"])
+
+        files = {
+            "all": responses_dir / "responses.txt",
+            "regular": responses_dir / "regular_responses.txt",
+            "special": responses_dir / "special_responses.txt",
+            "final": responses_dir / "final_response.txt"
+        }
+        
+        # Write to files
+        for file_path in files.values():
+            with open(file_path, "w") as f:
+                f.write(f"{session_status}\nSession ID: {self.session_id}\n\n")
+                
+        for analysis in analyses:
+            timestamp = analysis["end_timestamp"]
+            analysis_type = analysis["analysis_type"]
+            response = analysis["llm_response"]
+            
+            # Write to all responses file
+            with open(files["all"], "a") as f:
+                f.write(f"({analysis_type}) {timestamp}: {response}\n\n")
+            
+            # Write to type-specific file
+            with open(files[analysis_type], "a") as f:
+                f.write(f"{timestamp}: {response}\n\n")
