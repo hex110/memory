@@ -18,3 +18,4 @@ aiofiles
 sounddevice
 soundfile
 numpy
+opencv-python

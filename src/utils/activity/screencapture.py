@@ -1,38 +1,81 @@
-"""Screen capture functionality."""
+"""Screen capture functionality with video buffer support."""
 
 import base64
 from datetime import datetime
-from io import BytesIO
 import logging
-import os
-import aiofiles
+from io import BytesIO
+from collections import deque
 import asyncio
-from typing import Optional, Dict, Any
-
+from typing import Optional
+import cv2
+import numpy as np
 import pyscreenshot
 from PIL import Image, ImageDraw, ImageFont
 
 from src.utils.activity.windows import WindowManager
 from src.utils.activity.privacy import PrivacyConfig
 
-# Set up logging
 logger = logging.getLogger(__name__)
 
 class ScreenCapture:
-    """Handles screen capture and privacy filtering."""
+    """Handles screen capture and privacy filtering with video buffer support."""
 
-    def __init__(self, window_manager: WindowManager, privacy_config: PrivacyConfig):
+    def __init__(self, window_manager: WindowManager, privacy_config: PrivacyConfig, buffer_duration_seconds: int = 15):
         """Initialize screen capture.
         
         Args:
             window_manager: Window manager for getting window positions
             privacy_config: Privacy configuration to use
+            buffer_duration_seconds: Duration of video buffer in seconds
         """
         self.window_manager = window_manager
         self.privacy_config = privacy_config
+        self.buffer_duration = buffer_duration_seconds
+        
+        # Initialize font at startup
+        try:
+            self.font = ImageFont.truetype("/usr/share/fonts/OTF/SF-Pro-Rounded-Regular.otf", 128)
+        except:
+            self.font = ImageFont.load_default()
+            
+        # Video buffer setup
+        self.frame_buffer = deque(maxlen=buffer_duration_seconds)
+        self.recording = False
+        self.recording_task = None
 
-    async def capture_and_encode(self) -> Optional[str]:
-        """Capture screen, apply privacy filtering, and encode to base64."""
+    async def start_recording(self):
+        """Start the recording process."""
+        if self.recording:
+            return
+            
+        self.recording = True
+        self.frame_buffer.clear()
+        self.recording_task = asyncio.create_task(self._record_loop())
+
+    async def stop_recording(self):
+        """Stop the recording process."""
+        if not self.recording:
+            return
+            
+        self.recording = False
+        if self.recording_task:
+            await self.recording_task
+            self.recording_task = None
+
+    async def _record_loop(self):
+        """Main recording loop capturing frames at 1fps."""
+        while self.recording:
+            try:
+                frame = await self._capture_frame()
+                if frame is not None:
+                    self.frame_buffer.append(frame)
+                await asyncio.sleep(1)  # 1fps interval
+            except Exception as e:
+                logger.error(f"Error in recording loop: {e}")
+                await asyncio.sleep(1)  # Continue recording despite errors
+
+    async def _capture_frame(self) -> Optional[Image.Image]:
+        """Capture a single frame with privacy filtering."""
         try:
             # Run screenshot capture in a thread pool since it's CPU-bound
             screenshot = await asyncio.get_event_loop().run_in_executor(
@@ -43,11 +86,6 @@ class ScreenCapture:
             # Convert to PIL Image for drawing
             img = screenshot if isinstance(screenshot, Image.Image) else Image.fromarray(screenshot)
             draw = ImageDraw.Draw(img)
-
-            try:
-                font = ImageFont.truetype("/usr/share/fonts/OTF/SF-Pro-Rounded-Regular.otf", 128)  # Adjust size as needed
-            except:
-                font = ImageFont.load_default()  # Fallback to default font if unable to load
             
             # Apply privacy filtering only for visible windows
             windows = await self.window_manager.get_windows()
@@ -58,53 +96,68 @@ class ScreenCapture:
                     width, height = window['size']
                     draw.rectangle([(x, y), (x + width, y + height)], fill='black')
 
-                    # Prepare the text
+                    # Add text
                     class_name = window.get('class', 'Unknown Window')
                     text = f"Window: {class_name}\nFiltered for privacy"
                     
-                    # Calculate text size to center it
-                    bbox = draw.textbbox((0, 0), text, font=font)
+                    # Center the text
+                    bbox = draw.textbbox((0, 0), text, font=self.font)
                     text_width = bbox[2] - bbox[0]
                     text_height = bbox[3] - bbox[1]
-                    
-                    # Calculate center position
                     text_x = x + (width - text_width) // 2
                     text_y = y + (height - text_height) // 2
                     
-                    # Draw white text
-                    draw.text((text_x, text_y), text, fill='white', font=font, align='center')
-                    
-                    # logger.debug(f"Applied privacy filter to visible window: {window['class']}")
+                    draw.text((text_x, text_y), text, fill='white', font=self.font, align='center')
 
-            # Save debug image
-            try:
-                debug_path = "debug_screenshots"
-                os.makedirs(debug_path, exist_ok=True)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                debug_file = os.path.join(debug_path, f"screenshot_{timestamp}.png")
-                
-                # Save image in a buffer
-                buffer = BytesIO()
-                img.save(buffer, format="PNG")
-                buffer.seek(0)
-                
-                # Write buffer to file asynchronously
-                async with aiofiles.open(debug_file, 'wb') as f:
-                    await f.write(buffer.getvalue())
-                # logger.debug(f"Saved debug screenshot to {debug_file}")
-            except Exception as e:
-                logger.warning(f"Failed to save debug screenshot: {e}")
-            
-            # Convert to base64
-            buffer = BytesIO()
-            img.save(buffer, format="PNG")
-            encoded = base64.b64encode(buffer.getvalue()).decode('utf-8')
-            return encoded
+            return img
             
         except Exception as e:
-            logger.error(f"Screenshot failed: {e}")
+            logger.error(f"Frame capture failed: {e}")
             return None
 
+    async def get_video_buffer(self) -> Optional[bytes]:
+        """Convert current frame buffer to MP4 video bytes."""
+        if not self.frame_buffer:
+            return None
+            
+        try:
+            # Get frame dimensions from first frame
+            first_frame = self.frame_buffer[0]
+            height, width = first_frame.height, first_frame.width
+            
+            # Create video writer
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out_buffer = BytesIO()
+            out = cv2.VideoWriter('temp.mp4', fourcc, 1, (width, height))
+            
+            # Write frames
+            for frame in self.frame_buffer:
+                # Convert PIL to OpenCV format
+                cv_frame = cv2.cvtColor(np.array(frame), cv2.COLOR_RGB2BGR)
+                out.write(cv_frame)
+            
+            out.release()
+            
+            # Read the temporary file and return bytes
+            with open('temp.mp4', 'rb') as f:
+                video_bytes = f.read()
+                
+            return video_bytes
+            
+        except Exception as e:
+            logger.error(f"Failed to create video buffer: {e}")
+            return None
+
+    async def capture_and_encode(self) -> Optional[str]:
+        """Capture single screenshot and encode to base64 (kept for compatibility)."""
+        frame = await self._capture_frame()
+        if frame is None:
+            return None
+            
+        buffer = BytesIO()
+        frame.save(buffer, format="PNG")
+        return base64.b64encode(buffer.getvalue()).decode('utf-8')
+
     async def cleanup(self) -> None:
-        """Clean up any resources."""
-        pass
+        """Clean up resources."""
+        await self.stop_recording()
