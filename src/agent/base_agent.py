@@ -62,7 +62,7 @@ class BaseAgent(AgentInterface):
             raise ConfigError("Missing 'llm' section in config")
         
         # Initialize Gemini client
-        self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY")).aio
         self.model = self.config["llm"].get("model", "gemini-2.0-flash-exp")
         
         self.env = Environment(loader=FileSystemLoader(prompt_folder))
@@ -193,7 +193,7 @@ class BaseAgent(AgentInterface):
 
             self.logger.debug("Calling LLM")
 
-            response = self.client.models.generate_content(
+            response = await self.client.models.generate_content(
                 model=self.model,
                 contents=contents,
                 config=types.GenerateContentConfig(

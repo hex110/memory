@@ -9,8 +9,11 @@ import webbrowser
 import urllib.parse
 from dotenv import load_dotenv
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from src.utils.logging import get_logger
 
 load_dotenv()
+
+logger = get_logger(__name__)
 
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
@@ -57,9 +60,9 @@ async def fetch_with_retry(url: str, headers: dict, params: dict, method: str = 
                 return response
         except httpx.HTTPError as e:
             if attempt == max_retries - 1:
-                print(f"Request failed after multiple retries: {e}")
+                logger.error(f"Request failed after multiple retries: {e}")
                 raise
-            print(f"Error during fetch: {e}. Retrying in 2 seconds...")
+            logger.warning(f"Error during fetch: {e}. Retrying in 2 seconds...")
             await asyncio.sleep(2)
     return None
 
@@ -154,13 +157,13 @@ async def get_spotify_access_token():
                 store_token_data(token_data)
                 return token_data["access_token"]
             except Exception as e:
-                print(f"Error refreshing token: {e}")
+                logger.error(f"Error refreshing token: {e}")
                 # If refresh fails, re-authorize
                 token_data = None
 
     if not token_data:
         auth_url = generate_spotify_auth_url()
-        print(f"Please go to this URL to authorize the application: {auth_url}")
+        logger.info(f"Please go to this URL to authorize the application: {auth_url}")
         webbrowser.open(auth_url)
         run_local_server()  # Wait for the callback and get the auth code
 

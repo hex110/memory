@@ -21,3 +21,5 @@ numpy
 opencv-python
 google-cloud-texttospeech
 pydub
+absl-py
+pulsectl

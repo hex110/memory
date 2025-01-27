@@ -1,9 +1,10 @@
 """Main entry point for the memory system."""
-
-import asyncio
-import signal
-import uuid
 import os
+import asyncio
+import logging
+import signal
+import sys
+import uuid
 from pathlib import Path
 import subprocess
 import platform
@@ -12,7 +13,7 @@ from InquirerPy import inquirer
 
 from src.utils.config import load_config_and_logging
 from src.database.postgresql import PostgreSQLDatabase
-from src.utils.logging import get_logger
+from src.utils.logging import get_logger, configure_logging
 from src.agent.monitor_agent import MonitorAgent
 from src.agent.analysis_agent import AnalysisAgent
 from src.agent.assistant_agent import AssistantAgent
@@ -22,6 +23,10 @@ from src.utils.activity.privacy import PrivacyConfig
 from src.utils.activity.inputs import InputTracker
 from src.utils.activity.screencapture import ScreenCapture
 from uvicorn import Config, Server
+
+configure_logging()
+
+logger = get_logger(__name__)
 
 class MemorySystemCLI:
     """Command line interface for the memory system."""
@@ -38,10 +43,10 @@ class MemorySystemCLI:
         self.monitor_agent = None
         self.analysis_agent = None
         self.ontology_manager = ontology_manager
-        self.logger = get_logger(__name__)
         self.responses_dir = Path("responses")
         self.responses_dir.mkdir(exist_ok=True)
         self.config_path = Path("config.json")
+        self.is_shutting_down = False
 
         # Add new fields for core components
         self.window_manager = None
@@ -102,11 +107,11 @@ class MemorySystemCLI:
         """Start activity tracking (enable persistence)."""
         try:
             if not self.tracking_active:
-                self.logger.info("Starting activity tracking")
+                logger.info("Starting activity tracking")
                 await self.monitor_agent.start_monitoring()
                 await self.analysis_agent.start_analysis_cycles()
                 self.tracking_active = True
-                self.logger.info("Activity tracking started successfully")
+                logger.info("Activity tracking started successfully")
         except Exception as e:
             raise
 
@@ -114,19 +119,19 @@ class MemorySystemCLI:
         """Stop activity tracking (disable persistence)."""
         try:
             if self.tracking_active:
-                self.logger.info("Stopping activity tracking")
+                logger.info("Stopping activity tracking")
                 await self.monitor_agent.stop_monitoring()
                 await self.analysis_agent.stop_analysis_cycles()
                 self.tracking_active = False
-                self.logger.info("Activity tracking stopped successfully")
+                logger.info("Activity tracking stopped successfully")
         except Exception as e:
-            self.logger.error("Failed to stop tracking", extra={"error": str(e)})
+            logger.error("Failed to stop tracking", extra={"error": str(e)})
 
     async def _start_server(self):
         """Start the API server."""
         try:
             if not self.server_active:
-                self.logger.info("Starting server", extra={
+                logger.info("Starting server", extra={
                     "host": self.config["server"]["host"],
                     "port": self.config["server"]["port"]
                 })
@@ -139,17 +144,17 @@ class MemorySystemCLI:
                 server = Server(config)
                 self.server_task = asyncio.create_task(server.serve())
                 self.server_active = True
-                self.logger.info("Server started successfully")
+                logger.info("Server started successfully")
                 
         except Exception as e:
-            self.logger.error("Failed to start server", extra={"error": str(e)})
+            logger.error("Failed to start server", extra={"error": str(e)})
             raise
 
     async def _stop_server(self):
         """Stop the API server."""
         try:
             if self.server_active and self.server_task:
-                self.logger.info("Stopping server")
+                logger.info("Stopping server")
                 self.server_task.cancel()
                 try:
                     await self.server_task
@@ -157,9 +162,9 @@ class MemorySystemCLI:
                     pass
                 self.server_task = None
                 self.server_active = False
-                self.logger.info("Server stopped successfully")
+                logger.info("Server stopped successfully")
         except Exception as e:
-            self.logger.error("Failed to stop server", extra={"error": str(e)})
+            logger.error("Failed to stop server", extra={"error": str(e)})
             raise
 
     def open_file(self, filepath: Path):
@@ -172,7 +177,7 @@ class MemorySystemCLI:
             else:
                 subprocess.run(['xdg-open', filepath])
         except Exception as e:
-            self.logger.error("Failed to open file", {"filepath": str(filepath), "error": str(e)})
+            logger.error("Failed to open file", {"filepath": str(filepath), "error": str(e)})
 
     async def _analyze_session(self):
         """Handle session analysis workflow."""
@@ -202,7 +207,7 @@ class MemorySystemCLI:
                 print("No data available for analysis.")
         
         except Exception as e:
-            self.logger.error("Analysis failed", {"error": str(e)})
+            logger.error("Analysis failed", {"error": str(e)})
 
     def get_choices(self) -> List[str]:
         """Dynamically generate choices based on current state."""
@@ -262,7 +267,7 @@ class MemorySystemCLI:
                 print()
 
         except Exception as e:
-            self.logger.error(f"Error handling choice: {e}")
+            logger.error(f"Error handling choice: {e}")
             raise
 
     async def run(self):
@@ -275,60 +280,68 @@ class MemorySystemCLI:
                         choices=self.get_choices(),
                         default=None
                     ).execute_async()
-                    
-                    self.logger.info(f"Choice: {choice}")
+
+                    # logger.info(f"Choice: {choice}")
                     if choice == "Exit":
-                        self.logger.info("Exiting")
+                        # logger.info("Exiting")
                         if self.tracking_active or self.server_active:
                             confirm = await inquirer.confirm(
                                 message="Active processes will be stopped. Continue?"
                             ).execute_async()
                             if not confirm:
                                 continue
-                        self.logger.info("Cleaning up resources")
                         await self.cleanup()
                         break
                         
                     await self.handle_choice(choice)
 
                 except KeyboardInterrupt:
-                    self.logger.info("Received interrupt signal")
+                    logger.info("Received interrupt signal")
                     await self.cleanup()
                     break
         except asyncio.CancelledError:
-            self.logger.info("Received cancellation signal")
+            logger.info("Received cancellation signal")
             await self.cleanup()
         except Exception as e:
-            self.logger.error("Error in CLI run", extra={"error": str(e)})
+            logger.error("Error in CLI run", extra={"error": str(e)})
             await self.cleanup()
-    
+
     async def cleanup(self):
         """Cleanup resources."""
-        self.logger.info("Starting cleanup process")
+
+        if self.is_shutting_down:
+            return  # Prevent multiple shutdown attempts
+        
+        self.is_shutting_down = True
+        
+        logger.info("Starting cleanup process")
         try:
+
             await self.assistant_agent.stop()
 
             if self.tracking_active:
-                self.logger.debug("Stopping tracking")
+                # logger.debug("Stopping tracking")
                 await self._stop_tracking()
             if self.server_active:
-                self.logger.debug("Stopping server")
+                # logger.debug("Stopping server")
                 await self._stop_server()
-                
+                    
             # Add cleanup for core components
             if self.input_tracker:
-                self.logger.debug("Stopping input tracker")
+                # logger.debug("Stopping input tracker")
                 await self.input_tracker.stop()
             if self.screen_capture:
-                self.logger.debug("Stopping screen capture")
+                # logger.debug("Stopping screen capture")
                 await self.screen_capture.cleanup()
-                
+                    
             if self.db:
-                self.logger.debug("Closing database connection")
+                # logger.debug("Closing database connection")
                 await self.db.close()
-            self.logger.info("Cleanup completed successfully")
+                
+            logger.info("Cleanup completed successfully")
+                
         except Exception as e:
-            self.logger.error(f"Error during cleanup: {e}")
+            logger.error(f"Error during cleanup: {e}")
 
 async def async_main():
     """Async main entry point."""
@@ -346,7 +359,6 @@ async def async_main():
         await cli.run()
         
     except Exception as e:
-        logger = get_logger(__name__)
         logger.error("Error in async_main", {"error": str(e)})
         raise
 
@@ -355,10 +367,8 @@ def main():
     try:
         asyncio.run(async_main())
     except KeyboardInterrupt:
-        logger = get_logger(__name__)
         logger.info("Shutting down")
     except Exception as e:
-        logger = get_logger(__name__)
         logger.error("Fatal error", extra={"error": str(e)})
         raise
 

@@ -2,6 +2,9 @@
 
 import asyncio
 from collections.abc import AsyncIterable
+import subprocess
+import tempfile
+import time
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +12,7 @@ import os
 
 from google.genai import types
 import io
+import pulsectl
 import sounddevice as sd
 import numpy as np
 from pydub import AudioSegment
@@ -62,7 +66,7 @@ class AssistantAgent(BaseAgent):
             self.tts_engine = TTSEngine()
             self.audio_player = AudioPlayer()
             
-            self.logger.info("AssistantAgent initialized successfully")
+            # self.logger.info("AssistantAgent initialized successfully")
             
         except Exception as e:
             self.logger.error("Failed to initialize AssistantAgent", extra={
@@ -76,7 +80,7 @@ class AssistantAgent(BaseAgent):
             if not self.is_running:
                 self.logger.debug("Starting AssistantAgent")
                 self.is_running = True
-                
+
                 # Subscribe to hotkey events
                 await self.event_system.broadcaster.subscribe_hotkey(
                     HotkeyEventType.SPEAK,
@@ -94,7 +98,7 @@ class AssistantAgent(BaseAgent):
         """Stop the assistant agent."""
         try:
             if self.is_running:
-                self.logger.debug("Stopping AssistantAgent")
+                # self.logger.debug("Stopping AssistantAgent")
                 self.is_running = False
                 
                 # Stop recording if active
@@ -108,9 +112,9 @@ class AssistantAgent(BaseAgent):
                 await self.tts_engine.cleanup()
                 
                 # Cleanup audio player
-                self.audio_player.cleanup()
+                self.audio_player.stop_playback()
                 
-                self.logger.info("AssistantAgent stopped successfully")
+                # self.logger.info("AssistantAgent stopped successfully")
         except Exception as e:
             self.logger.error("Failed to stop AssistantAgent", extra={
                 "error": str(e)
@@ -126,7 +130,7 @@ class AssistantAgent(BaseAgent):
             if self.is_recording:
                 # Stop recording and process
                 await self._stop_recording()
-                await self._process_request()
+                asyncio.create_task(self._process_request())
             else:
                 # Start new recording
                 await self._start_recording()
@@ -229,9 +233,9 @@ class AssistantAgent(BaseAgent):
             audio_file_path = await self.tts_engine.synthesize_speech(llm_response)
             
             if audio_file_path:
-                await self.audio_player.play_file(audio_file_path)
+                self.audio_player.play_file(audio_file_path)
                 # Clean up audio file
-                os.remove(audio_file_path)
+                # os.remove(audio_file_path)
             else:
                 self.logger.error("TTS synthesis failed, no audio generated")
             # --- End of modification ---
@@ -291,58 +295,74 @@ class AssistantAgent(BaseAgent):
 
 class AudioPlayer:
     def __init__(self):
-      self.stream = None
+        self.device = 'pipewire'
+        self.current_process = None
 
     async def play_stream(self, audio_iterator: AsyncIterable[bytes]):
         """Play audio chunks as they arrive."""
         try:
-           first_chunk = True
-           async for chunk in audio_iterator:
-              if first_chunk:
-                  # Convert first MP3 chunk to get format info
-                  audio = AudioSegment.from_mp3(io.BytesIO(chunk))
-                  sample_rate = audio.frame_rate
-                  channels = audio.channels
-                  first_chunk = False
-                  
-              # Convert MP3 chunk to raw audio data
-              audio = AudioSegment.from_mp3(io.BytesIO(chunk))
-              raw_data = audio.raw_data
+            # Start ffplay with very explicit PCM parameters
+            self.current_process = subprocess.Popen(
+                ['ffplay',
+                '-f', 's16le',        # 16-bit little-endian PCM format
+                '-ar', '44100',       # sample rate
+                '-nodisp',            # no video display
+                '-autoexit',          # exit when done
+                '-i', 'pipe:0',       # explicitly specify input from pipe
+                '-loglevel', 'error'  # only show errors
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,  # capture errors
+                bufsize=0              # disable buffering
+            )
             
-              # Convert raw audio data to numpy array
-              np_array = np.frombuffer(raw_data, dtype=np.int16)
-              
-              # Reshape numpy array to handle channels
-              np_array = np_array.reshape(-1, channels)
-              
-              # Play the chunk
-              sd.play(np_array, sample_rate, blocking=False)
-              
-           sd.wait()
+            async for chunk in audio_iterator:
+                if self.current_process:
+                    try:
+                        self.current_process.stdin.write(chunk)
+                        self.current_process.stdin.flush()
+                            
+                    except BrokenPipeError:
+                        print("Broken pipe error occurred")
+                        break
+                        
+            if self.current_process and self.current_process.stdin:
+                self.current_process.stdin.close()
 
         except Exception as e:
             print(f"Error in play_stream: {e}")
 
-    async def play_file(self, file_path):
+    def play_file(self, file_path):
         try:
-             audio = AudioSegment.from_file(file_path)
-             sample_rate = audio.frame_rate
-             channels = audio.channels
-             
-             raw_data = audio.raw_data
-            
-             # Convert raw audio data to numpy array
-             np_array = np.frombuffer(raw_data, dtype=np.int16)
-              
-             # Reshape numpy array to handle channels
-             np_array = np_array.reshape(-1, channels)
-             
-             # Play the chunk
-             sd.play(np_array, sample_rate, blocking=True)
-             sd.wait()
+            # Kill any existing playback
+            if self.current_process:
+                self.current_process.terminate()
+                self.current_process = None
 
+            # Start new playback using ffplay
+            self.current_process = subprocess.Popen(
+                ['ffplay',
+                '-nodisp',          # no video display
+                '-autoexit',        # exit when done
+                '-loglevel', 'error',  # only show errors
+                '-i', file_path],   # input file
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            
+            # Create a background task to wait for completion and cleanup
+            async def wait_and_cleanup():
+                await asyncio.get_event_loop().run_in_executor(None, self.current_process.wait)
+                os.remove(file_path)
+                self.current_process = None
+            
+            asyncio.create_task(wait_and_cleanup())
+        
         except Exception as e:
             print(f"Error in play_file: {e}")
 
-    def cleanup(self):
-      pass #Do nothing
+    def stop_playback(self):
+        if self.current_process:
+            self.current_process.terminate()
+            self.current_process = None

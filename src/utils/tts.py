@@ -39,7 +39,7 @@ class TTSEngine:
     async def cleanup(self):
         """Cleanup TTS engine resources."""
         try:
-            self.logger.debug(self.client)
+            # self.logger.debug(self.client)
             if hasattr(self, 'client'):
                 pass
                 # Close the gRPC channel

@@ -110,7 +110,7 @@ def load_config_and_logging() -> Dict[str, Any]:
         with open(config_path, 'r') as f:
             config = json.load(f)
         
-        configure_logging(development=config.get("development", True))
+        # configure_logging(development=config.get("development", True))
             
         # Replace environment variables in config
         return replace_env_vars(config)
