@@ -82,7 +82,8 @@ class AgentInterface(ABC):
         config: Dict[str, Any],
         prompt_folder: str,
         db: Any,
-        ontology_manager: Any
+        ontology_manager: Any,
+        tts_engine: Optional[Any] = None
     ):
         """Initialize the agent.
         
@@ -91,6 +92,7 @@ class AgentInterface(ABC):
             prompt_folder: Path to prompt templates folder
             db: Database interface instance
             ontology_manager: Ontology manager instance
+            tts_engine: Optional text-to-speech engine instance
         """
         pass
     
@@ -167,17 +169,5 @@ class AgentInterface(ABC):
         Text-to-Speech:
             When tts=True, the response will be converted to speech using the configured
             TTS engine. Can be combined with streaming for real-time speech output.
-        """
-        pass
-    
-    @abstractmethod
-    async def execute(self) -> Any:
-        """Execute the agent's primary function.
-        
-        This method should be implemented by concrete agent classes to define
-        their specific behavior and interaction patterns.
-        
-        Returns:
-            Implementation-specific results
         """
         pass

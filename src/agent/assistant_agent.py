@@ -41,7 +41,10 @@ class AssistantAgent(BaseAgent):
             self.screen_capture = screen_capture
 
             self.available_tools = [
-                "spotify.spotify_control"
+                # "spotify.spotify_control"
+                "context.get_logs",
+                "context.get_recent_video",
+                "context.get_recent_inputs"
             ]
 
             self.event_system = EventSystem()
@@ -51,6 +54,11 @@ class AssistantAgent(BaseAgent):
             
             self.audio_recorder = AudioRecorder()
             self.current_recording_path = None
+
+
+            self.message_history = []  # Store conversation history
+            self.last_interaction_time = None  # Track last interaction
+            self.CONVERSATION_TIMEOUT = 30  # Seconds before conversation resets
             
             # self.logger.info("AssistantAgent initialized successfully")
             
@@ -172,6 +180,14 @@ class AssistantAgent(BaseAgent):
             })
             return "Could not retrieve recent activity context."
 
+    def _should_continue_conversation(self) -> bool:
+        """Check if we should continue existing conversation or start fresh."""
+        if not self.last_interaction_time:
+            return False
+            
+        elapsed = (datetime.now() - self.last_interaction_time).total_seconds()
+        return elapsed <= self.CONVERSATION_TIMEOUT
+
     async def _process_request(self):
         """Process voice input and generate response."""
         if not self.current_recording_path:
@@ -187,29 +203,54 @@ class AssistantAgent(BaseAgent):
 
             # Get system prompt
             system_prompt = self.load_prompt("assistant_system", context={})
+            user_prompt = self.load_prompt("assistant", context={
+                "previous_conversation": self.message_history
+            })
             
             # Get recent context and video
             context = await self._get_recent_context()
-            videos = []
-            video_buffer = await self.screen_capture.get_video_buffer()
-            if video_buffer:
-                videos.append((video_buffer, 'video/mp4'))
+            # videos = []
+            # video_buffer = await self.screen_capture.get_video_buffer()
+            # if video_buffer:
+            #     videos.append((video_buffer, 'video/mp4'))
+            
+            # Check if we should continue conversation
+            if not self._should_continue_conversation():
+                self.message_history = []  # Reset history
+                self.logger.debug("Starting new conversation")
 
             # Build user prompt with context
-            user_prompt = f"{context}\n\nMy request is in the audio message."
+            # user_prompt = f"{context}\n\nMy request is in the audio message."
 
-            self.logger.debug(f"User prompt: {user_prompt}")
+            # Add user message to history
+            self.message_history.append({
+                "role": "user",
+                "content": user_prompt
+            })
+
+            # self.logger.debug(f"User prompt: {user_prompt}")
 
             # Get LLM response
-            response_stream = await self.call_llm(
+            response = await self.call_llm(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
                 temperature=0.7,
                 audios=audios,
-                videos=videos,
-                # streaming=True,
+                # videos=videos,
+                message_history=self.message_history,
                 tts=True
             )
+
+            # Add assistant response to history
+            self.message_history.append({
+                "role": "assistant",
+                "content": response
+            })
+            
+            # Update last interaction time
+            self.last_interaction_time = datetime.now()
+
+            self.logger.debug(f"LLM response: {response}")
 
             # Clear current recording path
             self.current_recording_path = None

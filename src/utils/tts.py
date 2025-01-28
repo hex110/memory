@@ -73,11 +73,9 @@ class TTSEngine:
             
             async for chunk in text_stream:
                 sentences = buffer.add_chunk(chunk)
-                self.logger.debug(f"Processed chunk: {chunk}")
-                
+
                 # Process each sentence sequentially
                 for sentence in sentences:
-                    self.logger.debug(f"Processed sentence: {sentence}")
                     audio_data = await self._synthesize_speech(sentence)
                     if audio_data:
                         # Queue the audio and wait for it to finish playing
@@ -125,7 +123,7 @@ class TTSEngine:
                 audio_config=self.audio_config
             )
 
-            self.logger.debug(f"Audio content generated for text: {text[:50]}...")
+            # self.logger.debug(f"Audio content generated for text: {text[:50]}...")
             return response.audio_content
 
         except Exception as e:

@@ -119,6 +119,14 @@ class BaseAgent(AgentInterface):
                     # Initialize with db only for database tools
                     if tool_def.category == "database":
                         class_instances[module_path] = class_(self.db)
+                    elif tool_def.category == "context":
+                        class_instances[module_path] = class_(
+                            self.db,
+                            screen_capture=getattr(self, 'screen_capture', None),
+                            input_tracker=getattr(self, 'input_tracker', None)
+                        )
+                    elif tool_def.category == "interaction":
+                        class_instances[module_path] = class_(self.tts_engine)
                     else:
                         class_instances[module_path] = class_()
                         
@@ -219,6 +227,7 @@ class BaseAgent(AgentInterface):
 
                 async def process_stream():
                     async for chunk in base_stream:
+                        self.logger.debug(f"Chunk: {chunk}")
                         # Check if there's a function call and if it has the required attributes
                         if (hasattr(chunk.candidates[0].content.parts[0], 'function_call') and 
                             chunk.candidates[0].content.parts[0].function_call is not None and
@@ -281,7 +290,7 @@ class BaseAgent(AgentInterface):
                     )
                 )
 
-                self.logger.debug(f"Response: {response.text}")
+                # self.logger.debug(f"Response: {response.text}")
                 
                 # Check if there's a function call and if it has the required attributes
                 if (hasattr(response.candidates[0].content.parts[0], 'function_call') and 
@@ -327,16 +336,29 @@ class BaseAgent(AgentInterface):
             # self.logger.debug(f"Tool registry: {self.tool_registry[function_call.name]}")
             function = self.tool_registry[function_call.name]
             function_response = await function(**function_call.args)
-            
-            # Convert function response to string if needed
-            if not isinstance(function_response, str):
-                function_response = json.dumps(function_response)
+
+            # Convert function response to appropriate format
+            if isinstance(function_response, dict):
+                serializable_response = {}
+                binary_data = {}
+                
+                for key, value in function_response.items():
+                    if isinstance(value, bytes):
+                        if 'mime_type' in function_response:
+                            binary_data[key] = (value, function_response['mime_type'])
+                        else:
+                            binary_data[key] = (value, 'application/octet-stream')
+                    else:
+                        serializable_response[key] = value
+            else:
+                serializable_response = function_response
+                binary_data = {}
             
             if tool_behavior == ToolBehavior.USE_AND_DONE:
-                return function_response
-        
+                return serializable_response
+
             # Add tool response to message history
-            messages.append({"role": "tool", "content": function_response})
+            messages.append({"role": "tool", "content": serializable_response})
 
             contents = []
             for m in messages[:-2]:  # Convert previous messages
@@ -347,9 +369,19 @@ class BaseAgent(AgentInterface):
                 
             # Add function call and response in the format expected by Gemini
             contents.append(message)  # Function call content
+            
+            # Parse the serializable_response if it's a string
+            if isinstance(serializable_response, str):
+                try:
+                    parsed_response = json.loads(serializable_response)
+                except json.JSONDecodeError:
+                    parsed_response = {"result": serializable_response}
+            else:
+                parsed_response = serializable_response
+
             function_response_part = types.Part.from_function_response(
                 name=function_call.name,
-                response={"result": function_response}
+                response=parsed_response
             )
             contents.append(types.Content(
                 role="tool", 
@@ -357,15 +389,24 @@ class BaseAgent(AgentInterface):
             ))
             
             if tool_behavior == ToolBehavior.USE_AND_ANALYZE_OUTPUT_AND_DONE:
-                response = self.client.models.generate_content(
+                # Add binary data to kwargs if present
+                if binary_data:
+                    for key, (data, mime_type) in binary_data.items():
+                        contents[-1].parts.append(types.Part.from_bytes(data=data, mime_type=mime_type))
+                
+                # Remove media from kwargs since they'll be in contents
+                for media_type in ['videos', 'images', 'audios']:
+                    kwargs.pop(media_type, None)
+                
+                response = await self.client.models.generate_content(
                     model=self.model,
-                    contents=contents
+                    contents=contents,
+                    config=types.GenerateContentConfig(**kwargs)
                 )
-                # return response.text
-                return response
+                return response.text
             
             else:  # KEEP_USING_UNTIL_DONE
-                response = self.client.models.generate_content(
+                response = await self.client.models.generate_content(
                     model=self.model,
                     contents=contents,
                     config=types.GenerateContentConfig(
@@ -387,28 +428,3 @@ class BaseAgent(AgentInterface):
         except Exception as e:
             self.logger.error(f"Tool call failed: {str(e)}", exc_info=True)
             return json.dumps({"error": str(e)})
-    
-    def validate_function_response(self, response: str, model_class: Any) -> Any:
-        """Validate and parse a function response using a Pydantic model."""
-        try:
-            if isinstance(response, str):
-                data = json.loads(repair_json(response))
-            else:
-                data = response
-            return model_class.model_validate(data)
-        except Exception as e:
-            raise ValueError(f"Failed to validate function response: {str(e)}")
-    
-    async def execute(self) -> Any:
-        """Execute the agent's primary function.
-        
-        This should be implemented by subclasses.
-        """
-        raise NotImplementedError
-    
-    def parse_response(self, response: str) -> Any:
-        """Parse the LLM's response.
-        
-        This can be overridden by subclasses for specific parsing.
-        """
-        return response

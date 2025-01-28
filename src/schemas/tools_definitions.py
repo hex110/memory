@@ -163,6 +163,106 @@ TOOL_REGISTRY = {
         "Use 'get_playlists' to get a list of playlists first. "
             "Use 'like_current' or 'unlike_current' to like or unlike the currently playing song, respectively."
         )
+    ),
+
+    "context.get_logs": ToolDefinition(
+        name="get_logs",
+        description="Retrieve recent user observation logs (one log per 30 seconds)",
+        parameters={
+            "count": {
+                "type": "INTEGER",
+                "description": "Number of most recent logs to retrieve"
+            }
+        },
+        required_params=["count"],
+        category="context",
+        implementation="context.get_logs",
+        implementation_type="method",
+        class_name="ContextTools",
+        prompt_hint=(
+            "Use get_logs when you need to understand what the user has been doing recently. "
+            "Each log represents 30 seconds of activity. Request only the number of logs needed for context."
+        )
+    ),
+
+    "interaction.text_to_speech": ToolDefinition(
+        name="text_to_speech",
+        description="Convert text to speech and play it",
+        parameters={
+            "message": {
+                "type": "STRING",
+                "description": "Message to be spoken"
+            }
+        },
+        required_params=["message"],
+        category="interaction",
+        implementation="interaction.text_to_speech",
+        implementation_type="method",
+        class_name="InteractionTools",
+        prompt_hint=(
+            "Use text_to_speech to verbally communicate important information to the user. "
+            "Keep messages clear and concise for better audio delivery."
+        )
+    ),
+
+    "context.bookmark_moment": ToolDefinition(
+        name="bookmark_moment",
+        description="Save the current timestamp as a bookmark",
+        parameters={
+            "dummy": {
+                "type": "STRING",
+                "description": "This parameter is not used"
+            }
+        },
+        required_params=[],
+        category="context",
+        implementation="context.bookmark_moment",
+        implementation_type="method",
+        class_name="ContextTools",
+        prompt_hint=(
+            "Use bookmark_moment to save the current moment for later reference. "
+            "Call this when the user wants to remember or return to something later."
+        )
+    ),
+
+    "context.get_recent_video": ToolDefinition(
+        name="get_recent_video",
+        description="Get recent screen recording for context",
+        parameters={
+            "dummy": {  # We need at least one property for OBJECT type
+                "type": "STRING",
+                "description": "This parameter is not used"
+            }
+        },
+        required_params=[],
+        category="context",
+        implementation="context.get_recent_video",
+        implementation_type="method",
+        class_name="ContextTools",
+        prompt_hint=(
+            "Use get_recent_video when you need visual context about what's on the user's screen. "
+            "This will provide a short video clip of recent activity."
+        )
+    ),
+
+    "context.get_recent_inputs": ToolDefinition(
+        name="get_recent_inputs",
+        description="Get recent keyboard and mouse activity",
+        parameters={
+            "seconds": {
+                "type": "INTEGER",
+                "description": "Number of seconds of history to retrieve (default 30)"
+            }
+        },
+        required_params=[],
+        category="context",
+        implementation="context.get_recent_inputs",
+        implementation_type="method",
+        class_name="ContextTools",
+        prompt_hint=(
+            "Use get_recent_inputs to understand the user's recent keyboard and mouse activity. "
+            "This provides details about which windows were active and what kind of interaction occurred."
+        )
     )
 }
 
