@@ -18,10 +18,8 @@ from src.agent.monitor_agent import MonitorAgent
 from src.agent.analysis_agent import AnalysisAgent
 from src.agent.assistant_agent import AssistantAgent
 from src.ontology.manager import OntologyManager
-from src.utils.activity.windows import WindowManager
-from src.utils.activity.privacy import PrivacyConfig
-from src.utils.activity.inputs import InputTracker
-from src.utils.activity.screencapture import ScreenCapture
+from src.utils.activity.activity_manager import ActivityManager
+from src.utils.events import HotkeyEventType
 from uvicorn import Config, Server
 
 from src.utils.tts import TTSEngine
@@ -50,11 +48,8 @@ class MemorySystemCLI:
         self.config_path = Path("config.json")
         self.is_shutting_down = False
 
-        # Add new fields for core components
-        self.window_manager = None
-        self.privacy_config = None
-        self.input_tracker = None
-        self.screen_capture = None
+        # Add new field for activity manager
+        self.activity_manager = None
         self.tts_engine = None
     @classmethod
     async def create(cls, config: Dict[str, Any]) -> 'MemorySystemCLI':
@@ -65,16 +60,14 @@ class MemorySystemCLI:
         # Create instance
         cli = cls(config, db, ontology_manager)
         
-        # Initialize core components
-        cli.window_manager = WindowManager()
-        cli.privacy_config = PrivacyConfig()
-        cli.input_tracker = InputTracker(cli.window_manager, cli.privacy_config, config["hotkeys"])
-        cli.screen_capture = ScreenCapture(cli.window_manager, cli.privacy_config)
-        cli.tts_engine = await TTSEngine.create()
+        # Initialize activity manager
+        cli.activity_manager = ActivityManager()
         
-        # Start background tracking
-        await cli.input_tracker.start()
-        await cli.screen_capture.start_recording()
+        # Start tracking, video, and audio
+        await cli.activity_manager.start_recording()
+        
+        # Initialize TTS engine
+        cli.tts_engine = await TTSEngine.create()
         
         # Create agents with components
         cli.monitor_agent = MonitorAgent(
@@ -83,7 +76,8 @@ class MemorySystemCLI:
             db=db,
             ontology_manager=ontology_manager,
             session_id=str(uuid.uuid4()),
-            tts_engine=cli.tts_engine
+            tts_engine=cli.tts_engine,
+            activity_manager=cli.activity_manager
         )
         
         cli.analysis_agent = AnalysisAgent(
@@ -100,12 +94,33 @@ class MemorySystemCLI:
             prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
             db=db,
             ontology_manager=ontology_manager,
-            input_tracker=cli.input_tracker,
-            screen_capture=cli.screen_capture,
-            tts_engine=cli.tts_engine
+            tts_engine=cli.tts_engine,
+            activity_manager=cli.activity_manager,
         )
 
         await cli.assistant_agent.start()
+        
+        # Register hotkeys
+        for hotkey_name, hotkey_data in config["hotkeys"].items():
+            if hotkey_name == "speak_hotkey":
+                hotkey_type = HotkeyEventType.SPEAK
+            # Add more conditions if you have more hotkey types
+
+            async def hotkey_action(event, hotkey_type=hotkey_type):
+                # The callback now receives the hotkey_type as an argument
+                if hotkey_type == HotkeyEventType.SPEAK:
+                    if not cli.activity_manager.audio_recorder.is_recording:
+                        await cli.activity_manager.start_recording()
+                    else:
+                        await cli.activity_manager.stop_recording()
+                # Add more conditions to handle other hotkey types
+            
+            # Register the hotkey with the correct type
+            cli.activity_manager.register_hotkey(
+                hotkey=hotkey_data,
+                hotkey_type=hotkey_type,  # Pass the HotkeyEventType here
+                callback=hotkey_action
+            )
 
         return cli
 
@@ -114,6 +129,7 @@ class MemorySystemCLI:
         try:
             if not self.tracking_active:
                 logger.info("Starting activity tracking")
+                await self.activity_manager.input_tracker.enable_persistence()
                 await self.monitor_agent.start_monitoring()
                 await self.analysis_agent.start_analysis_cycles()
                 self.tracking_active = True
@@ -128,6 +144,7 @@ class MemorySystemCLI:
                 logger.info("Stopping activity tracking")
                 await self.monitor_agent.stop_monitoring()
                 await self.analysis_agent.stop_analysis_cycles()
+                await self.activity_manager.input_tracker.disable_persistence()
                 self.tracking_active = False
                 logger.info("Activity tracking stopped successfully")
         except Exception as e:
@@ -331,15 +348,10 @@ class MemorySystemCLI:
             if self.server_active:
                 # logger.debug("Stopping server")
                 await self._stop_server()
-                    
-            # Add cleanup for core components
-            if self.input_tracker:
-                # logger.debug("Stopping input tracker")
-                await self.input_tracker.stop()
-            if self.screen_capture:
-                # logger.debug("Stopping screen capture")
-                await self.screen_capture.cleanup()
-                    
+                
+            # Cleanup activity manager
+            await self.activity_manager.cleanup()
+                
             if self.db:
                 # logger.debug("Closing database connection")
                 await self.db.close()
@@ -365,7 +377,7 @@ async def async_main():
         await cli.run()
         
     except Exception as e:
-        logger.error("Error in async_main", {"error": str(e)})
+        logger.error("Error in async_main", {"error": str(e)}, exc_info=True)
         raise
 
 def main():

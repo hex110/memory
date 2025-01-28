@@ -21,22 +21,24 @@ from evdev import InputDevice, categorize, ecodes
 
 from src.utils.events import EventBroadcaster
 from src.utils.exceptions import KeyboardTrackingError
-from src.utils.activity.windows import WindowManager
-from src.utils.activity.session import WindowSession
-from src.utils.activity.privacy import PrivacyConfig
+from src.utils.activity.compositor.base_compositor import BaseCompositor
+from src.utils.activity.trackers.session import WindowSession
+from src.utils.activity.trackers.privacy import PrivacyConfig
 from src.utils.events import HotkeyEvent, HotkeyEventType, EventSystem
+
+from src.utils.activity.trackers.inputs.base import BaseInputTracker
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
-class InputTracker:
+class EvdevInputTracker(BaseInputTracker):
     """Tracks keyboard and mouse activity using evdev."""
     
-    def __init__(self, window_manager: WindowManager, privacy_config: PrivacyConfig, hotkeys: Dict[str, Any]) -> None:
+    def __init__(self, compositor: BaseCompositor, privacy_config: PrivacyConfig, hotkeys: Dict[str, Any]) -> None:
         """Initialize the input tracker.
         
         Args:
-            window_manager: Window manager implementation to use
+            compositor: Compositor implementation to use
             privacy_config: Privacy configuration to use
         """
         # Event storage
@@ -50,7 +52,7 @@ class InputTracker:
         # Tracking state
         self.devices: List[InputDevice] = []
         self.is_running = False
-        self.window_manager = window_manager
+        self.compositor = compositor
         self.privacy_config = privacy_config
         
         # Event filtering
@@ -175,24 +177,23 @@ class InputTracker:
                             # Hotkey detection
                             key_name = evdev.ecodes.keys.get(event.code)
                             # logger.debug(f"Key name: {key_name}")
-                            if key_name and key_name in self.hotkeys["speak_hotkey"]:
-                                # Track key state
-                                if event.value == 1:  # Press
-                                    self.pressed_keys.add(key_name)
-                                    
-                                    # Check for hotkey combination
-                                    speak_hotkey = set(self.hotkeys["speak_hotkey"])
-                                    if self.pressed_keys.issuperset(speak_hotkey):
-                                        # logger.debug("Hotkey detected")
-                                        await self.event_system.broadcaster.broadcast_hotkey(
-                                            HotkeyEvent(
-                                                timestamp=datetime.now().isoformat(),
-                                                hotkey_type=HotkeyEventType.SPEAK
+                            for hotkey_type, hotkey in self.hotkeys.items():
+                                if key_name and key_name in hotkey:
+                                    # Track key state
+                                    if event.value == 1:  # Press
+                                        self.pressed_keys.add(key_name)
+                                        
+                                        # Check for hotkey combination
+                                        if self.pressed_keys.issuperset(set(hotkey)):
+                                            await self.event_system.broadcaster.broadcast_hotkey(
+                                                HotkeyEvent(
+                                                    timestamp=datetime.now().isoformat(),
+                                                    hotkey_type=hotkey_type
+                                                )
                                             )
-                                        )
-                                
-                                elif event.value == 0:  # Release
-                                    self.pressed_keys.discard(key_name)
+                                    
+                                    elif event.value == 0:  # Release
+                                        self.pressed_keys.discard(key_name)
                             
 
                             
@@ -285,10 +286,10 @@ class InputTracker:
                 raise KeyboardTrackingError("No input devices found")
             
             # Set up window focus tracking
-            await self.window_manager.setup_focus_tracking(self._on_window_focus_change)
+            await self.compositor.setup_focus_tracking(self._on_window_focus_change)
 
             # Start with current window if any
-            current_window = await self.window_manager.get_active_window()
+            current_window = await self.compositor.get_active_window()
             if current_window:
                 await self._on_window_focus_change(current_window)
             
@@ -333,7 +334,7 @@ class InputTracker:
             Dict containing window sessions and event totals
         """
         # Get current window info
-        current_window = await self.window_manager.get_active_window()
+        current_window = await self.compositor.get_active_window()
 
         # End current session and get the data
         session_data = None

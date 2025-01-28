@@ -11,10 +11,7 @@ from pathlib import Path
 
 from src.interfaces.postgresql import DatabaseInterface
 from src.ontology.manager import OntologyManager
-from src.utils.activity.inputs import InputTracker
-from src.utils.activity.screencapture import ScreenCapture
-from src.utils.activity.windows import WindowManager
-from src.utils.activity.privacy import PrivacyConfig
+from src.utils.activity.activity_manager import ActivityManager
 from .base_agent import BaseAgent
 from src.utils.tts import TTSEngine
 from src.utils.events import ActivityEvent, ActivityEventType, EventSystem
@@ -27,7 +24,8 @@ class MonitorAgent(BaseAgent):
         db: DatabaseInterface,
         ontology_manager: OntologyManager,
         session_id: str,
-        tts_engine: TTSEngine
+        tts_engine: TTSEngine,
+        activity_manager: ActivityManager
     ):
             
         super().__init__(
@@ -52,23 +50,13 @@ class MonitorAgent(BaseAgent):
         self.event_system = EventSystem()
         
         try:
-            # Initialize core services
-            self.window_manager = WindowManager()
-            
-            self.privacy_config = PrivacyConfig()
-            
-            # Initialize trackers with dependencies
-            self.input_tracker = InputTracker(self.window_manager, self.privacy_config, self.config["hotkeys"])
-            # Set up the interrupt callback
-            self.input_tracker.set_interrupt_callback(lambda: asyncio.create_task(self.stop_monitoring()))
-            
-            self.screen_capture = ScreenCapture(self.window_manager, self.privacy_config)
             
             # Monitoring state
             self.is_monitoring = False
             self.monitor_thread = None
             self.collection_interval = self.config["tracking"].get("activity_log_interval", 10)
             self.session_id = session_id
+            self.activity_manager = activity_manager
             
             # self.logger.debug("MonitorAgent initialization complete", extra={
             #     "collection_interval": self.collection_interval,
@@ -86,12 +74,8 @@ class MonitorAgent(BaseAgent):
         """Start activity tracking."""
         try:
             if not self.is_monitoring:
-                # Start input tracker if not already running
-                if not self.input_tracker.is_running:
-                    await self.input_tracker.start()
-                
-                # Enable persistence
-                await self.input_tracker.enable_persistence()
+                # Enable persistence in the input tracker
+                await self.activity_manager.input_tracker.enable_persistence()
                 
                 self.is_monitoring = True
                 self.monitor_task = asyncio.create_task(self._monitoring_loop())
@@ -116,8 +100,8 @@ class MonitorAgent(BaseAgent):
                         pass
                     self.monitor_task = None
                 
-                # Disable persistence but keep tracking running
-                await self.input_tracker.disable_persistence()
+                # Disable persistence in the input tracker
+                await self.activity_manager.input_tracker.disable_persistence()
                 
                 self.logger.info("Activity monitoring stopped")
         except Exception as e:
@@ -130,11 +114,11 @@ class MonitorAgent(BaseAgent):
         await asyncio.sleep(self.collection_interval)
         while self.is_monitoring:
             try:
-                # Get data from input tracker
-                activity_data = await self.input_tracker.get_events()
+                # Get data from activity manager
+                activity_data = await self.activity_manager.input_tracker.get_events()
 
                 # Capture screenshot
-                screen_data = await self.screen_capture.capture_and_encode()
+                screen_data = await self.activity_manager.capture_screenshot()
                 if screen_data:
                     activity_data["screenshot"] = screen_data
                 

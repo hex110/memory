@@ -4,13 +4,10 @@ import asyncio
 from typing import Dict, Any, List
 from datetime import datetime
 
-
 from src.interfaces.postgresql import DatabaseInterface
 from src.ontology.manager import OntologyManager
+from src.utils.activity.activity_manager import ActivityManager
 from src.utils.events import HotkeyEvent, HotkeyEventType, EventSystem
-from src.utils.activity.audio import AudioRecorder
-from src.utils.activity.inputs import InputTracker
-from src.utils.activity.screencapture import ScreenCapture
 from src.utils.tts import TTSEngine
 from .base_agent import BaseAgent
 
@@ -23,9 +20,8 @@ class AssistantAgent(BaseAgent):
         prompt_folder: str,
         db: DatabaseInterface,
         ontology_manager: OntologyManager,
-        input_tracker: InputTracker,
-        screen_capture: ScreenCapture,
-        tts_engine: TTSEngine
+        tts_engine: TTSEngine,
+        activity_manager: ActivityManager
     ):
         super().__init__(
             config=config,
@@ -36,10 +32,7 @@ class AssistantAgent(BaseAgent):
         )
 
         try:
-            # Add references to trackers
-            self.input_tracker = input_tracker
-            self.screen_capture = screen_capture
-
+            self.activity_manager = activity_manager
             self.available_tools = [
                 # "spotify.spotify_control"
                 "context.get_logs",
@@ -51,10 +44,6 @@ class AssistantAgent(BaseAgent):
             
             self.is_running = False
             self.is_recording = False
-            
-            self.audio_recorder = AudioRecorder()
-            self.current_recording_path = None
-
 
             self.message_history = []  # Store conversation history
             self.last_interaction_time = None  # Track last interaction
@@ -97,12 +86,16 @@ class AssistantAgent(BaseAgent):
                 
                 # Stop recording if active
                 if self.is_recording:
-                    await self.tts_engine.audio_player.skip_current()
+                    await self.activity_manager.stop_recording()
                 
-                # Cleanup audio recorder
-                await self.audio_recorder.cleanup()
-                
-                # self.logger.info("AssistantAgent stopped successfully")
+                # Unsubscribe from hotkey events (optional, for cleanup)
+                # Note: You might need to modify your EventSystem to support unsubscription
+                # await self.event_system.broadcaster.unsubscribe_hotkey(
+                #     HotkeyEventType.SPEAK,
+                #     self._handle_hotkey
+                # )
+
+                self.logger.info("AssistantAgent stopped successfully")
         except Exception as e:
             self.logger.error("Failed to stop AssistantAgent", extra={
                 "error": str(e)
@@ -132,8 +125,8 @@ class AssistantAgent(BaseAgent):
         """Start audio recording."""
         try:
             self.is_recording = True
-            await self.audio_recorder.start_recording()
-            self.logger.debug("Recording started...")  # User feedback
+            await self.activity_manager.start_recording()
+            self.logger.debug("Recording started...")
 
             if self.tts_engine:
                 await self.tts_engine.audio_player.skip_current()
@@ -149,10 +142,8 @@ class AssistantAgent(BaseAgent):
         """Stop audio recording."""
         try:
             self.is_recording = False
-            
-            # Stop recording and get file path
-            self.current_recording_path = await self.audio_recorder.stop_recording()
-            self.logger.debug("Recording stopped...")  # User feedback
+            await self.activity_manager.stop_recording()
+            self.logger.debug("Recording stopped...")
             
         except Exception as e:
             self.logger.error("Failed to stop recording", extra={
@@ -163,14 +154,14 @@ class AssistantAgent(BaseAgent):
     async def _get_recent_context(self) -> str:
         """Get formatted string of recent activity context."""
         try:
-            recent_sessions = await self.input_tracker.get_recent_sessions(seconds=30)
+            recent_sessions = await self.activity_manager.get_recent_sessions(seconds=30)
             
             context = "For context, here is what I was doing before calling for assistance:\n\n"
             
             for session in recent_sessions:
-                context += f"Window: {session.window_info['class']} - {session.window_info['title']}\n"
-                context += f"From {session.start_time.strftime('%H:%M:%S')} to {session.end_time.strftime('%H:%M:%S')}\n"
-                context += f"Activity: {session.key_count} keys, {session.click_count} clicks, {session.scroll_count} scrolls\n\n"
+                context += f"Window: {session['window_class']} - {session['window_title']}\n"
+                context += f"From {session['start_time']} to {session['end_time']}\n"
+                context += f"Activity: {session['key_count']} keys, {session['click_count']} clicks, {session['scroll_count']} scrolls\n\n"
             
             return context
             
@@ -190,14 +181,18 @@ class AssistantAgent(BaseAgent):
 
     async def _process_request(self):
         """Process voice input and generate response."""
-        if not self.current_recording_path:
+        
+        # Retrieve audio from activity manager
+        audio_filepath = self.activity_manager.get_audio_filepath()
+
+        if not audio_filepath:
             self.logger.error("No recording available to process")
             return
 
         try:
             # Get audio data
             audios = []
-            with open(self.current_recording_path, 'rb') as f:
+            with open(audio_filepath, 'rb') as f:
                 audio_bytes = f.read()
                 audios.append((audio_bytes, 'audio/wav'))
 
@@ -210,7 +205,7 @@ class AssistantAgent(BaseAgent):
             # Get recent context and video
             context = await self._get_recent_context()
             # videos = []
-            # video_buffer = await self.screen_capture.get_video_buffer()
+            # video_buffer = await self.activity_manager.get_video_buffer()
             # if video_buffer:
             #     videos.append((video_buffer, 'video/mp4'))
             
@@ -219,8 +214,8 @@ class AssistantAgent(BaseAgent):
                 self.message_history = []  # Reset history
                 self.logger.debug("Starting new conversation")
 
-            # Build user prompt with context
-            # user_prompt = f"{context}\n\nMy request is in the audio message."
+            # Add context to user prompt
+            user_prompt = f"{context}\n\n{user_prompt}"
 
             # Add user message to history
             self.message_history.append({
@@ -251,9 +246,6 @@ class AssistantAgent(BaseAgent):
             self.last_interaction_time = datetime.now()
 
             self.logger.debug(f"LLM response: {response}")
-
-            # Clear current recording path
-            self.current_recording_path = None
             
         except Exception as e:
             self.logger.error("Failed to process voice input", extra={

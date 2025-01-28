@@ -12,24 +12,26 @@ import numpy as np
 import pyscreenshot
 from PIL import Image, ImageDraw, ImageFont
 
-from src.utils.activity.windows import WindowManager
-from src.utils.activity.privacy import PrivacyConfig
+from src.utils.activity.compositor.base_compositor import BaseCompositor
+from src.utils.activity.trackers.privacy import PrivacyConfig
 
 logger = logging.getLogger(__name__)
 
 class ScreenCapture:
     """Handles screen capture and privacy filtering with video buffer support."""
 
-    def __init__(self, window_manager: WindowManager, privacy_config: PrivacyConfig, buffer_duration_seconds: int = 15):
+    def __init__(self, compositor: BaseCompositor, privacy_config: PrivacyConfig, backend: str = "grim", buffer_duration_seconds: int = 15):
         """Initialize screen capture.
         
         Args:
-            window_manager: Window manager for getting window positions
+            compositor: Compositor for getting window information
             privacy_config: Privacy configuration to use
+            backend: Backend for pyscreenshot (e.g., "grim", "mss")
             buffer_duration_seconds: Duration of video buffer in seconds
         """
-        self.window_manager = window_manager
+        self.compositor = compositor
         self.privacy_config = privacy_config
+        self.backend = backend
         self.buffer_duration = buffer_duration_seconds
         
         # Initialize font at startup
@@ -80,7 +82,7 @@ class ScreenCapture:
             # Run screenshot capture in a thread pool since it's CPU-bound
             screenshot = await asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: pyscreenshot.grab(backend="grim")
+                lambda: pyscreenshot.grab(backend=self.backend)
             )
             
             # Convert to PIL Image for drawing
@@ -88,9 +90,9 @@ class ScreenCapture:
             draw = ImageDraw.Draw(img)
             
             # Apply privacy filtering only for visible windows
-            windows = await self.window_manager.get_windows()
+            windows = await self.compositor.get_windows()
             for window in windows:
-                if window['visible'] and self.privacy_config.is_private(window):
+                if self.compositor.is_window_visible(window) and self.privacy_config.is_private(window):
                     # Draw black rectangle over private window
                     x, y = window['position']
                     width, height = window['size']

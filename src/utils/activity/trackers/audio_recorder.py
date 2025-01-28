@@ -83,6 +83,7 @@ class AudioRecorder:
             # Generate filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filepath = recordings_dir / f"recording_{timestamp}.wav"
+            self.filepath = filepath
             
             # Save recording
             sf.write(
