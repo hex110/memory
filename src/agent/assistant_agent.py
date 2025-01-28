@@ -1,21 +1,8 @@
 """Assistant agent implementation."""
 
 import asyncio
-from collections.abc import AsyncIterable
-import subprocess
-import tempfile
-import time
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List
 from datetime import datetime
-from pathlib import Path
-import os
-
-from google.genai import types
-import io
-import pulsectl
-import sounddevice as sd
-import numpy as np
-from pydub import AudioSegment
 
 
 from src.interfaces.postgresql import DatabaseInterface
@@ -37,13 +24,15 @@ class AssistantAgent(BaseAgent):
         db: DatabaseInterface,
         ontology_manager: OntologyManager,
         input_tracker: InputTracker,
-        screen_capture: ScreenCapture
+        screen_capture: ScreenCapture,
+        tts_engine: TTSEngine
     ):
         super().__init__(
             config=config,
             prompt_folder=prompt_folder,
             db=db,
-            ontology_manager=ontology_manager
+            ontology_manager=ontology_manager,
+            tts_engine=tts_engine
         )
 
         try:
@@ -62,9 +51,6 @@ class AssistantAgent(BaseAgent):
             
             self.audio_recorder = AudioRecorder()
             self.current_recording_path = None
-
-            self.tts_engine = TTSEngine()
-            self.audio_player = AudioPlayer()
             
             # self.logger.info("AssistantAgent initialized successfully")
             
@@ -78,7 +64,7 @@ class AssistantAgent(BaseAgent):
         """Start the assistant agent."""
         try:
             if not self.is_running:
-                self.logger.debug("Starting AssistantAgent")
+                # self.logger.debug("Starting AssistantAgent")
                 self.is_running = True
 
                 # Subscribe to hotkey events
@@ -103,16 +89,10 @@ class AssistantAgent(BaseAgent):
                 
                 # Stop recording if active
                 if self.is_recording:
-                    await self._stop_recording()
+                    await self.tts_engine.audio_player.skip_current()
                 
                 # Cleanup audio recorder
                 await self.audio_recorder.cleanup()
-
-                # Cleanup TTS engine
-                await self.tts_engine.cleanup()
-                
-                # Cleanup audio player
-                self.audio_player.stop_playback()
                 
                 # self.logger.info("AssistantAgent stopped successfully")
         except Exception as e:
@@ -146,6 +126,9 @@ class AssistantAgent(BaseAgent):
             self.is_recording = True
             await self.audio_recorder.start_recording()
             self.logger.debug("Recording started...")  # User feedback
+
+            if self.tts_engine:
+                await self.tts_engine.audio_player.skip_current()
             
         except Exception as e:
             self.logger.error("Failed to start recording", extra={
@@ -218,27 +201,15 @@ class AssistantAgent(BaseAgent):
             self.logger.debug(f"User prompt: {user_prompt}")
 
             # Get LLM response
-            llm_response = await self.call_llm(
+            response_stream = await self.call_llm(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
                 temperature=0.7,
                 audios=audios,
-                videos=videos
+                videos=videos,
+                # streaming=True,
+                tts=True
             )
-            
-            # Log response to terminal
-            self.logger.debug(f"\nAssistant: {llm_response}")
-            
-            # --- Modified part: Use non-streaming TTS and play the file ---
-            audio_file_path = await self.tts_engine.synthesize_speech(llm_response)
-            
-            if audio_file_path:
-                self.audio_player.play_file(audio_file_path)
-                # Clean up audio file
-                # os.remove(audio_file_path)
-            else:
-                self.logger.error("TTS synthesis failed, no audio generated")
-            # --- End of modification ---
 
             # Clear current recording path
             self.current_recording_path = None
@@ -292,77 +263,3 @@ class AssistantAgent(BaseAgent):
                 "error": str(e)
             })
             raise
-
-class AudioPlayer:
-    def __init__(self):
-        self.device = 'pipewire'
-        self.current_process = None
-
-    async def play_stream(self, audio_iterator: AsyncIterable[bytes]):
-        """Play audio chunks as they arrive."""
-        try:
-            # Start ffplay with very explicit PCM parameters
-            self.current_process = subprocess.Popen(
-                ['ffplay',
-                '-f', 's16le',        # 16-bit little-endian PCM format
-                '-ar', '44100',       # sample rate
-                '-nodisp',            # no video display
-                '-autoexit',          # exit when done
-                '-i', 'pipe:0',       # explicitly specify input from pipe
-                '-loglevel', 'error'  # only show errors
-                ],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,  # capture errors
-                bufsize=0              # disable buffering
-            )
-            
-            async for chunk in audio_iterator:
-                if self.current_process:
-                    try:
-                        self.current_process.stdin.write(chunk)
-                        self.current_process.stdin.flush()
-                            
-                    except BrokenPipeError:
-                        print("Broken pipe error occurred")
-                        break
-                        
-            if self.current_process and self.current_process.stdin:
-                self.current_process.stdin.close()
-
-        except Exception as e:
-            print(f"Error in play_stream: {e}")
-
-    def play_file(self, file_path):
-        try:
-            # Kill any existing playback
-            if self.current_process:
-                self.current_process.terminate()
-                self.current_process = None
-
-            # Start new playback using ffplay
-            self.current_process = subprocess.Popen(
-                ['ffplay',
-                '-nodisp',          # no video display
-                '-autoexit',        # exit when done
-                '-loglevel', 'error',  # only show errors
-                '-i', file_path],   # input file
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-            
-            # Create a background task to wait for completion and cleanup
-            async def wait_and_cleanup():
-                await asyncio.get_event_loop().run_in_executor(None, self.current_process.wait)
-                os.remove(file_path)
-                self.current_process = None
-            
-            asyncio.create_task(wait_and_cleanup())
-        
-        except Exception as e:
-            print(f"Error in play_file: {e}")
-
-    def stop_playback(self):
-        if self.current_process:
-            self.current_process.terminate()
-            self.current_process = None

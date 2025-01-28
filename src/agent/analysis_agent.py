@@ -11,7 +11,7 @@ from src.interfaces.postgresql import DatabaseInterface
 from src.ontology.manager import OntologyManager
 from src.utils.events import ActivityEventType, ActivityEvent, EventSystem
 from .base_agent import BaseAgent
-
+from src.utils.tts import TTSEngine
 class AnalysisAgent(BaseAgent):
     """Agent for analyzing user activity data at different time scales."""
     
@@ -21,13 +21,15 @@ class AnalysisAgent(BaseAgent):
         prompt_folder: str,
         db: DatabaseInterface,
         ontology_manager: OntologyManager,
-        session_id: str
+        session_id: str,
+        tts_engine: TTSEngine
     ):
         super().__init__(
             config=config,
             prompt_folder=prompt_folder,
             db=db,
-            ontology_manager=ontology_manager
+            ontology_manager=ontology_manager,
+            tts_engine=tts_engine
         )
 
         # self.logger.debug("Initializing AnalysisAgent", extra={

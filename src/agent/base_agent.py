@@ -1,12 +1,14 @@
 """Base implementation of the agent interface."""
 
+import asyncio
+from collections.abc import AsyncIterable
 import os
 import json
 import time
 import logging
 from enum import Enum
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Callable, Union
+from typing import Dict, Any, Optional, List, Union, Tuple
 from jinja2 import Environment, FileSystemLoader
 
 from google import genai
@@ -24,6 +26,7 @@ from src.interfaces.postgresql import DatabaseInterface
 from src.ontology.manager import OntologyManager
 from src.utils.logging import get_logger
 from src.schemas.tools_definitions import get_tool_implementations
+from src.utils.tts import TTSEngine, tee_stream
 
 class ToolBehavior(Enum):
     """Controls how tools are used and their outputs handled."""
@@ -39,7 +42,8 @@ class BaseAgent(AgentInterface):
         config: Dict[str, Any],
         prompt_folder: str,
         db: DatabaseInterface,
-        ontology_manager: OntologyManager
+        ontology_manager: OntologyManager,
+        tts_engine: Optional[TTSEngine] = None
     ):
         """Initialize the agent.
         
@@ -69,6 +73,7 @@ class BaseAgent(AgentInterface):
         
         self.db = db
         self.ontology_manager = ontology_manager
+        self.tts_engine = tts_engine
 
         # Initialize tool registry
         self.tool_registry = {}
@@ -136,8 +141,10 @@ class BaseAgent(AgentInterface):
         images: Optional[List[tuple[bytes, str]]] = None,  # List of (bytes, mime_type)
         videos: Optional[List[tuple[bytes, str]]] = None,  # List of (bytes, mime_type)
         audios: Optional[List[tuple[bytes, str]]] = None,  # List of (bytes, mime_type)
+        streaming: bool = False,
+        tts: bool = False,
         **kwargs
-    ) -> str:
+    ) -> Union[str, AsyncIterable[str]]:
         try:
             contents = []
         
@@ -193,28 +200,101 @@ class BaseAgent(AgentInterface):
 
             self.logger.debug("Calling LLM")
 
-            response = await self.client.models.generate_content(
-                model=self.model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    temperature=temperature,
-                    tools=tools,
-                    **config_kwargs
+            # Always use streaming if TTS is enabled
+            use_stream = streaming or tts
+
+            if use_stream:
+                full_response = []
+
+                # Create the base stream
+                base_stream = self.client.models.generate_content_stream(
+                    model=self.model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        temperature=temperature,
+                        tools=tools,
+                        **config_kwargs
+                    )
                 )
-            )
+
+                async def process_stream():
+                    async for chunk in base_stream:
+                        # Check if there's a function call and if it has the required attributes
+                        if (hasattr(chunk.candidates[0].content.parts[0], 'function_call') and 
+                            chunk.candidates[0].content.parts[0].function_call is not None and
+                            hasattr(chunk.candidates[0].content.parts[0].function_call, 'name')):
+                            # If we get a function call in streaming mode, fall back to non-streaming
+                            response = await self._handle_tool_calls(
+                                message=chunk.candidates[0].content,
+                                messages=messages,
+                                tool_behavior=tool_behavior,
+                                kwargs=kwargs
+                            )
+                            yield response
+                            return
+                        
+                        # self.logger.debug(f"Yielding chunk: {chunk.text}")
+                        yield chunk.text
+
+                # Create the processed stream
+                processed_stream = process_stream()
+
+                if tts and streaming:
+                    # If both TTS and streaming are needed, create two separate streams
+                    tts_stream, response_stream = await tee_stream(processed_stream)
+                    # Start TTS processing
+                    asyncio.create_task(self.tts_engine.play_stream(tts_stream))
+                    # Return the response stream
+                    return response_stream
+                elif tts:
+                    # If only TTS is needed, but we still want to process chunks as they arrive
+                    tts_stream, collection_stream, fill_task = await tee_stream(processed_stream)
+                    
+                    # Start TTS processing with the streaming chunks
+                    tts_task = asyncio.create_task(self.tts_engine.play_stream(tts_stream))
+                    
+                    # Collect the full response while waiting for both tasks
+                    async for chunk in collection_stream:
+                        full_response.append(chunk)
+                        
+                    # Wait for both tasks to complete
+                    await asyncio.gather(fill_task, tts_task)
+                    
+                    return ''.join(full_response)
+                elif streaming:
+                    # If only streaming is needed
+                    return processed_stream
+                else:
+                    # If neither is needed, collect full response
+                    async for chunk in processed_stream:
+                        full_response.append(chunk)
+                    return ''.join(full_response)
             
-            # Check for function calls
-            if hasattr(response, 'candidates') and response.candidates[0].content.parts[0].function_call:
-                self.logger.debug(f"Function call: {response.candidates[0].content.parts[0].function_call}")
-                return await self._handle_tool_calls(
-                    message=response.candidates[0].content,
-                    messages=messages,
-                    tool_behavior=tool_behavior,
-                    kwargs=kwargs
+            else:
+                response = await self.client.models.generate_content(
+                    model=self.model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        temperature=temperature,
+                        tools=tools,
+                        **config_kwargs
+                    )
                 )
-            
-            # self.logger.debug(f"Response: {response.text}")
-            return response.text
+
+                self.logger.debug(f"Response: {response.text}")
+                
+                # Check if there's a function call and if it has the required attributes
+                if (hasattr(response.candidates[0].content.parts[0], 'function_call') and 
+                    response.candidates[0].content.parts[0].function_call is not None and
+                    hasattr(response.candidates[0].content.parts[0].function_call, 'name')):
+                    return await self._handle_tool_calls(
+                        message=response.candidates[0].content,
+                        messages=messages,
+                        tool_behavior=tool_behavior,
+                        kwargs=kwargs
+                    )
+                
+                return response.text
             
         except Exception as e:
             raise APIResponseError(f"Error calling LLM: {str(e)}") from e
@@ -281,8 +361,9 @@ class BaseAgent(AgentInterface):
                     model=self.model,
                     contents=contents
                 )
-                return response.text
-                
+                # return response.text
+                return response
+            
             else:  # KEEP_USING_UNTIL_DONE
                 response = self.client.models.generate_content(
                     model=self.model,

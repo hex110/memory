@@ -16,6 +16,7 @@ from src.utils.activity.screencapture import ScreenCapture
 from src.utils.activity.windows import WindowManager
 from src.utils.activity.privacy import PrivacyConfig
 from .base_agent import BaseAgent
+from src.utils.tts import TTSEngine
 from src.utils.events import ActivityEvent, ActivityEventType, EventSystem
 
 class MonitorAgent(BaseAgent):
@@ -25,14 +26,16 @@ class MonitorAgent(BaseAgent):
         prompt_folder: str,
         db: DatabaseInterface,
         ontology_manager: OntologyManager,
-        session_id: str
+        session_id: str,
+        tts_engine: TTSEngine
     ):
             
         super().__init__(
             config=config,
             prompt_folder=prompt_folder,
             db=db,
-            ontology_manager=ontology_manager
+            ontology_manager=ontology_manager,
+            tts_engine=tts_engine
         )
 
         # self.logger.debug("Initializing MonitorAgent", extra={

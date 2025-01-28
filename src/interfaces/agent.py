@@ -23,6 +23,7 @@ supports:
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional, Union, Callable
+from collections.abc import AsyncIterable
 from enum import Enum
 
 class ToolBehavior(Enum):
@@ -118,8 +119,10 @@ class AgentInterface(ABC):
         images: Optional[List[tuple[bytes, str]]] = None,  # List of (bytes, mime_type)
         videos: Optional[List[tuple[bytes, str]]] = None,  # List of (bytes, mime_type)
         audios: Optional[List[tuple[bytes, str]]] = None,  # List of (bytes, mime_type)
+        streaming: bool = False,
+        tts: bool = False,
         **kwargs
-    ) -> str:
+    ) -> Union[str, AsyncIterable[str]]:
         """Call the LLM with comprehensive support for different interaction modes.
         
         Args:
@@ -132,10 +135,13 @@ class AgentInterface(ABC):
             images: List of (image_data, mime_type) tuples
             videos: List of (video_data, mime_type) tuples
             audios: List of (audio_data, mime_type) tuples
+            streaming: Whether to stream the response as it's generated
+            tts: Whether to enable text-to-speech for the response
             **kwargs: Additional arguments passed to the LLM
             
         Returns:
-            LLM response text or tool output depending on tool_behavior
+            If streaming=True: AsyncIterable[str] yielding response chunks
+            If streaming=False: str containing complete response
             
         Message Format:
             Messages should be dictionaries with 'role' and 'content' keys:
@@ -153,6 +159,14 @@ class AgentInterface(ABC):
             - USE_AND_DONE: Returns raw tool output
             - USE_AND_ANALYZE_OUTPUT_AND_DONE: Returns LLM's analysis of tool output
             - KEEP_USING_UNTIL_DONE: Allows multiple tool calls to complete task
+            
+        Streaming:
+            When streaming=True, returns an AsyncIterable that yields response chunks
+            as they become available. This enables real-time display of responses.
+            
+        Text-to-Speech:
+            When tts=True, the response will be converted to speech using the configured
+            TTS engine. Can be combined with streaming for real-time speech output.
         """
         pass
     

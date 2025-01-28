@@ -24,6 +24,8 @@ from src.utils.activity.inputs import InputTracker
 from src.utils.activity.screencapture import ScreenCapture
 from uvicorn import Config, Server
 
+from src.utils.tts import TTSEngine
+
 configure_logging()
 
 logger = get_logger(__name__)
@@ -53,7 +55,7 @@ class MemorySystemCLI:
         self.privacy_config = None
         self.input_tracker = None
         self.screen_capture = None
-
+        self.tts_engine = None
     @classmethod
     async def create(cls, config: Dict[str, Any]) -> 'MemorySystemCLI':
         """Create and initialize a new CLI instance."""
@@ -68,6 +70,7 @@ class MemorySystemCLI:
         cli.privacy_config = PrivacyConfig()
         cli.input_tracker = InputTracker(cli.window_manager, cli.privacy_config, config["hotkeys"])
         cli.screen_capture = ScreenCapture(cli.window_manager, cli.privacy_config)
+        cli.tts_engine = await TTSEngine.create()
         
         # Start background tracking
         await cli.input_tracker.start()
@@ -79,7 +82,8 @@ class MemorySystemCLI:
             prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
             db=db,
             ontology_manager=ontology_manager,
-            session_id=str(uuid.uuid4())
+            session_id=str(uuid.uuid4()),
+            tts_engine=cli.tts_engine
         )
         
         cli.analysis_agent = AnalysisAgent(
@@ -87,7 +91,8 @@ class MemorySystemCLI:
             prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
             db=db,
             ontology_manager=ontology_manager,
-            session_id=cli.monitor_agent.session_id
+            session_id=cli.monitor_agent.session_id,
+            tts_engine=cli.tts_engine
         )
         
         cli.assistant_agent = AssistantAgent(
@@ -96,7 +101,8 @@ class MemorySystemCLI:
             db=db,
             ontology_manager=ontology_manager,
             input_tracker=cli.input_tracker,
-            screen_capture=cli.screen_capture
+            screen_capture=cli.screen_capture,
+            tts_engine=cli.tts_engine
         )
 
         await cli.assistant_agent.start()
