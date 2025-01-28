@@ -1,14 +1,14 @@
 from datetime import datetime
 from src.utils.logging import get_logger
 import json
-
+from src.utils.activity.activity_manager import ActivityManager
+from src.database.postgresql import PostgreSQLDatabase
 logger = get_logger(__name__)
 
 class ContextTools:
-    def __init__(self, db, screen_capture=None, input_tracker=None):
+    def __init__(self, db: PostgreSQLDatabase, activity_manager: ActivityManager = None):
         self.db = db
-        self.screen_capture = screen_capture
-        self.input_tracker = input_tracker
+        self.activity_manager = activity_manager
         
     async def get_logs(self, count: int):
         """Get recent user observation logs."""
@@ -56,10 +56,10 @@ class ContextTools:
 
     async def get_recent_video(self):
         """Get recent screen recording buffer."""
-        if not self.screen_capture:
-            return {"error": "Screen capture not available"}
+        if not self.activity_manager:
+            return {"error": "Activity manager not available"}
             
-        video_buffer = await self.screen_capture.get_video_buffer()
+        video_buffer = await self.activity_manager.get_video_buffer()
         if video_buffer:
             return {
                 "status": "success",
@@ -73,7 +73,7 @@ class ContextTools:
         if not self.input_tracker:
             return {"error": "Input tracker not available"}
             
-        recent_sessions = await self.input_tracker.get_recent_sessions(seconds=seconds)
+        recent_sessions = await self.activity_manager.get_recent_sessions(seconds=seconds)
         
         formatted_sessions = []
         for session in recent_sessions:

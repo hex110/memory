@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class ScreenCapture:
     """Handles screen capture and privacy filtering with video buffer support."""
 
-    def __init__(self, compositor: BaseCompositor, privacy_config: PrivacyConfig, backend: str = "grim", buffer_duration_seconds: int = 15):
+    def __init__(self, compositor: BaseCompositor, privacy_config: PrivacyConfig, backend: str = "grim", video_duration: int = 30):
         """Initialize screen capture.
         
         Args:
@@ -32,7 +32,7 @@ class ScreenCapture:
         self.compositor = compositor
         self.privacy_config = privacy_config
         self.backend = backend
-        self.buffer_duration = buffer_duration_seconds
+        self.video_duration = video_duration
         
         # Initialize font at startup
         try:
@@ -41,7 +41,7 @@ class ScreenCapture:
             self.font = ImageFont.load_default()
             
         # Video buffer setup
-        self.frame_buffer = deque(maxlen=buffer_duration_seconds)
+        self.frame_buffer = deque(maxlen=video_duration)
         self.recording = False
         self.recording_task = None
 

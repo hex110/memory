@@ -121,9 +121,8 @@ class BaseAgent(AgentInterface):
                         class_instances[module_path] = class_(self.db)
                     elif tool_def.category == "context":
                         class_instances[module_path] = class_(
-                            self.db,
-                            screen_capture=getattr(self, 'screen_capture', None),
-                            input_tracker=getattr(self, 'input_tracker', None)
+                            db=self.db,
+                            activity_manager=getattr(self, 'activity_manager', None)
                         )
                     elif tool_def.category == "interaction":
                         class_instances[module_path] = class_(self.tts_engine)
@@ -227,7 +226,7 @@ class BaseAgent(AgentInterface):
 
                 async def process_stream():
                     async for chunk in base_stream:
-                        self.logger.debug(f"Chunk: {chunk}")
+                        # self.logger.debug(f"Chunk: {chunk}")
                         # Check if there's a function call and if it has the required attributes
                         if (hasattr(chunk.candidates[0].content.parts[0], 'function_call') and 
                             chunk.candidates[0].content.parts[0].function_call is not None and

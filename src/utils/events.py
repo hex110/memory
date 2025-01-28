@@ -11,7 +11,7 @@ class ActivityEventType(Enum):
     ANALYSIS_STORED = "analysis_stored"
 
 class HotkeyEventType(Enum):
-    SPEAK = "speak"
+    HOTKEY_SPEAK = "speak"
 
 @dataclass
 class ActivityEvent:

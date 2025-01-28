@@ -5,12 +5,12 @@ within a specific window focus period. It maintains information about
 keyboard/mouse events and timing for a single window session.
 """
 
-import logging
+from src.utils.logging import get_logger
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
 # Set up logging
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class WindowSession:
     """Tracks activity data for a single window focus period."""
@@ -46,6 +46,8 @@ class WindowSession:
             self.click_count += 1
         elif event_type == "scroll":
             self.scroll_count += 1
+        
+        # logger.debug(f"Current session: {self.key_events}")
     
     async def end_session(self, end_time: datetime) -> None:
         """End this window session.

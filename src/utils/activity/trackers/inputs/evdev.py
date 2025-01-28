@@ -1,98 +1,38 @@
-"""Input tracking functionality.
-
-This module provides input device monitoring with support for:
-- Event filtering through privacy settings
-- Thread-safe event collection
-- Automatic device discovery
-- Window-based activity tracking
-- Error recovery
-"""
-
 import asyncio
 import errno
 import logging
 from datetime import datetime
-import select
 from typing import Dict, List, Optional, Any, Callable
 from collections import deque
 
 import evdev
 from evdev import InputDevice, categorize, ecodes
 
-from src.utils.events import EventBroadcaster
 from src.utils.exceptions import KeyboardTrackingError
 from src.utils.activity.compositor.base_compositor import BaseCompositor
 from src.utils.activity.trackers.session import WindowSession
 from src.utils.activity.trackers.privacy import PrivacyConfig
 from src.utils.events import HotkeyEvent, HotkeyEventType, EventSystem
+from src.utils.activity.trackers.inputs.baseinput import BaseInputTracker
 
-from src.utils.activity.trackers.inputs.base import BaseInputTracker
-
-# Set up logging
 logger = logging.getLogger(__name__)
 
 class EvdevInputTracker(BaseInputTracker):
     """Tracks keyboard and mouse activity using evdev."""
     
-    def __init__(self, compositor: BaseCompositor, privacy_config: PrivacyConfig, hotkeys: Dict[str, Any]) -> None:
-        """Initialize the input tracker.
-        
-        Args:
-            compositor: Compositor implementation to use
-            privacy_config: Privacy configuration to use
-        """
-        # Event storage
+    def __init__(self, compositor: BaseCompositor, privacy_config: PrivacyConfig, hotkeys: Dict[HotkeyEventType, str]):
+        """Initialize the input tracker."""
+        super().__init__(compositor, privacy_config, hotkeys)
         self.current_session: Optional[WindowSession] = None
         self.pending_sessions: List[WindowSession] = []
-        
-        # Add new buffer for recent sessions
-        self.recent_sessions = deque(maxlen=30)  # Keep last 30 seconds worth
+        self.recent_sessions = deque(maxlen=30)
         self.should_persist = False
-        
-        # Tracking state
         self.devices: List[InputDevice] = []
-        self.is_running = False
-        self.compositor = compositor
-        self.privacy_config = privacy_config
-        
-        # Event filtering
-        self._should_track_callback: Optional[Callable[[], bool]] = None
-        
-        # Add callback for Ctrl+C detection
-        self._on_interrupt_callback: Optional[Callable[[], None]] = None
-
-        # Async management
         self._device_tasks: List[asyncio.Task] = []
-        
-        # Event totals
         self._total_keys = 0
         self._total_clicks = 0
         self._total_scrolls = 0
 
-        self.pressed_keys = set()
-        self.hotkeys = hotkeys
-        self.event_system = EventSystem()
-
-        # logger.debug(f"InputTracker initialized with hotkeys: {hotkeys}")
-    
-    def set_interrupt_callback(self, callback: Callable[[], None]) -> None:
-        """Set callback to be called when Ctrl+C is detected."""
-        self._on_interrupt_callback = callback
-
-    def _get_button_name(self, code: int) -> str:
-        """Convert button codes to human-readable names."""
-        button_map = {
-            272: "Button.left",
-            273: "Button.right",
-            274: "Button.middle",
-            275: "Button.side",
-            276: "Button.extra",
-            277: "Button.forward",
-            278: "Button.back",
-            279: "Button.task",
-        }
-        return button_map.get(code, f"Button.{code}")
-    
     async def enable_persistence(self) -> None:
         """Enable saving sessions to pending_sessions."""
         self.should_persist = True
@@ -100,30 +40,6 @@ class EvdevInputTracker(BaseInputTracker):
     async def disable_persistence(self) -> None:
         """Disable saving sessions to pending_sessions."""
         self.should_persist = False
-
-    async def _on_window_focus_change(self, window_info: Dict[str, str]) -> None:
-        """Handle window focus changes.
-        
-        Args:
-            window_info: Information about the newly focused window
-        """
-        now = datetime.now()
-        
-        # End current session if exists and add it to the list of sessions
-        if self.current_session:
-            await self.current_session.end_session(now)
-            
-            # Always add to recent buffer
-            self.recent_sessions.append(self.current_session)
-            
-            # Only add to pending if persistence enabled and not private
-            if self.should_persist and not self.privacy_config.is_private(window_info):
-                self.pending_sessions.append(self.current_session)
-            # else:
-            #     logger.debug(f"Skipping persistence for session with {window_info['class']}")
-
-        # Start new session
-        self.current_session = WindowSession(window_info, now)
     
     def find_input_devices(self) -> None:
         """Find all keyboard and mouse input devices."""
@@ -145,7 +61,6 @@ class EvdevInputTracker(BaseInputTracker):
                         found_devices.append(device)
             
             self.devices = found_devices
-            # logger.debug(f"Found {len(self.devices)} input devices")
             
         except Exception as e:
             raise KeyboardTrackingError(f"Failed to find input devices: {e}")
@@ -153,271 +68,159 @@ class EvdevInputTracker(BaseInputTracker):
     async def _monitor_device(self, device: InputDevice) -> None:
         """Monitor a single input device for events."""
         try:
-            while self.is_running:
-                try:
-                    async for event in device.async_read_loop():
-                        if not self.is_running:
-                            break
+            async for event in device.async_read_loop():
+                if not self.is_running:
+                    break
 
-                        # Check if we should track this event
-                        if self._should_track_callback and not self._should_track_callback():
-                            continue
+                # Skip if no current session or if the current window is private
+                if not self.current_session or self.privacy_config.is_private(self.current_session.window_info):
+                    continue
 
-                        # Skip if no active window session
-                        if not self.current_session:
-                            continue
+                if event.type == evdev.ecodes.EV_KEY:
+                    
+                    key_name = evdev.ecodes.keys.get(event.code)
+                    if isinstance(key_name, list):
+                        key_name = key_name[0]
+                    # logger.debug(f"Key name: {key_name}, event value: {event.value}")
 
-                        # Skip if current window is private
-                        if self.privacy_config.is_private(self.current_session.window_info):
-                            continue
-                            
+                    # Simplify handling mouse button and keyboard keys
+                    if key_name:
+                        
+                        event_type = "press" if event.value == 1 else "release" if event.value == 0 else "hold"
+                        timestamp = datetime.now().isoformat()
+                        
+                        if key_name.startswith("BTN_"):
+                            # Handle mouse button event
+                            if event_type == "press":
+                                button_name = self._standardize_mouse_button(key_name)
+                                self._total_clicks += 1
+                                # logger.debug(f"Mouse button pressed: {button_name}")
+                                await self.current_session.add_event("click", {
+                                    "button": button_name,
+                                    "timestamp": timestamp
+                                })
+                        elif key_name.startswith("KEY_"):
+                            # Handle keyboard key event
+                            key = key_name[4:] # Remove the KEY_ prefix
 
-                        if event.type == evdev.ecodes.EV_KEY:
+                            # Update pressed_keys for modifier keys
+                            # if key in ["LEFTSHIFT", "RIGHTSHIFT"]:
+                            if event_type == "press":
+                                self.pressed_keys.add(key.lower())
+                            elif event_type == "release":
+                                self.pressed_keys.discard(key.lower())
                             
-                            # Hotkey detection
-                            key_name = evdev.ecodes.keys.get(event.code)
-                            # logger.debug(f"Key name: {key_name}")
-                            for hotkey_type, hotkey in self.hotkeys.items():
-                                if key_name and key_name in hotkey:
-                                    # Track key state
-                                    if event.value == 1:  # Press
-                                        self.pressed_keys.add(key_name)
-                                        
-                                        # Check for hotkey combination
-                                        if self.pressed_keys.issuperset(set(hotkey)):
-                                            await self.event_system.broadcaster.broadcast_hotkey(
-                                                HotkeyEvent(
-                                                    timestamp=datetime.now().isoformat(),
-                                                    hotkey_type=hotkey_type
-                                                )
-                                            )
-                                    
-                                    elif event.value == 0:  # Release
-                                        self.pressed_keys.discard(key_name)
-                            
-
-                            
-                            timestamp = datetime.now().isoformat()
-                            
-                            # Handle mouse buttons (BTN_LEFT to BTN_TASK)
-                            if event.code in range(272, 280):
-                                if event.value == 1:  # Press only
-                                    self._total_clicks += 1
-                                    await self.current_session.add_event("click", {
-                                        "button": self._get_button_name(event.code),
+                            # logger.debug(f"Pressed keys: {self.pressed_keys}")
+                            if event_type == "press":
+                                self._total_keys += 1
+                                standardized_key = self._standardize_key_name(key)
+                                # logger.debug(f"Key pressed: {standardized_key}")
+                                await self.current_session.add_event("key", {
+                                        "type": event_type,
+                                        "key": standardized_key,
                                         "timestamp": timestamp
                                     })
-                            
-                            # Handle keyboard keys
-                            elif event.code in evdev.ecodes.keys:
-                                key_name = evdev.ecodes.keys[event.code]
-                                # Only track actual keyboard keys
-                                if key_name.startswith("KEY_"):
-                                    event_type = ("press" if event.value == 1 else 
-                                                "release" if event.value == 0 else "hold")
+                                
+                                # Check for hotkeys
+                                # logger.debug(f"Checking hotkeys: {self.pressed_keys}")
+                                await self._check_hotkeys()
 
-                                    if event_type == "press":
-                                        self._total_keys += 1
-                                        # Convert key names to more readable format
-                                        key = key_name[4:]  # Remove KEY_ prefix
-                                        if len(key) == 1:
-                                            key = key.lower()
-                                        elif key in ["LEFTSHIFT", "RIGHTSHIFT", "LEFTCTRL", 
-                                                "RIGHTCTRL", "LEFTALT", "RIGHTALT", 
-                                                "LEFTMETA", "RIGHTMETA"]:
-                                            continue  # Skip modifier keys
-                                        
-                                        await self.current_session.add_event("key", {
-                                            "type": event_type,
-                                            "key": key,
-                                            "timestamp": timestamp
-                                        })
-                                    
-                        elif event.type == evdev.ecodes.EV_REL:
-                            # Track both vertical and horizontal scroll
-                            if event.code in [evdev.ecodes.REL_WHEEL, evdev.ecodes.REL_HWHEEL]:
-                                self._total_scrolls += abs(event.value)
-                                if self.current_session:
-                                    await self.current_session.add_event("scroll", {
-                                        "direction": "vertical" if event.code == evdev.ecodes.REL_WHEEL else "horizontal",
-                                        "amount": event.value,
-                                        "timestamp": datetime.now().isoformat()
-                                    })
-                
-                except (OSError, IOError) as e:
-                    if e.errno == errno.ENODEV:  # Device has been removed
-                        break
-                    logger.warning(f"Device error: {e}, retrying...")
-                    await asyncio.sleep(1)
-                    continue
-        
+                elif event.type == evdev.ecodes.EV_REL:
+                    # Track both vertical and horizontal scroll
+                    if event.code in [evdev.ecodes.REL_WHEEL, evdev.ecodes.REL_HWHEEL]:
+                        self._total_scrolls += abs(event.value)
+                        # Log the scroll event
+                        scroll_direction = "vertical" if event.code == evdev.ecodes.REL_WHEEL else "horizontal"
+                        scroll_amount = event.value
+                        # logger.debug(f"Mouse scrolled: {scroll_direction}, amount: {scroll_amount}")
+                        
+                        if self.current_session:
+                            await self.current_session.add_event("scroll", {
+                                "direction": scroll_direction,
+                                "amount": scroll_amount,
+                                "timestamp": datetime.now().isoformat()
+                            })
+
+        except (OSError, IOError) as e:
+            if e.errno == errno.ENODEV:
+                logger.warning(f"Device {device} disconnected")
+                if device in self.devices:
+                    self.devices.remove(device)
+            else:
+                logger.warning(f"Device error: {e}, retrying...")
+                await asyncio.sleep(1)
         except asyncio.CancelledError:
+            # logger.debug("Stopping monitoring task")
             raise
         except Exception as e:
-            logger.warning(f"Device monitoring error: {e}")
-            if device in self.devices:
-                self.devices.remove(device)
-        finally:
-            try:
-                device.close()
-            except Exception as e:
-                logger.warning(f"Error closing device: {e}")
-    
+            logger.error(f"Error in input monitoring: {e}", exc_info=True)
+            await asyncio.sleep(1)
+
     async def _monitor_all_devices(self) -> None:
         """Monitor all discovered input devices."""
-        try:
-            self._device_tasks = [
-                asyncio.create_task(self._monitor_device(device))
-                for device in self.devices
-            ]
-            # if self._device_tasks:
-            #     await asyncio.gather(*self._device_tasks, return_exceptions=True)
-                
-        except Exception as e:
-            raise KeyboardTrackingError(f"Failed to monitor devices: {e}")
+        self._device_tasks = [
+            asyncio.create_task(self._monitor_device(device))
+            for device in self.devices
+        ]
+        if self._device_tasks:
+            await asyncio.wait(self._device_tasks, return_when=asyncio.FIRST_COMPLETED)
     
     async def start(self) -> None:
         """Start tracking keyboard and mouse events."""
+        if self.is_running:
+            return
+        
         try:
-            if not self.devices:
-                self.find_input_devices()
-            
+            self.find_input_devices()
             if not self.devices:
                 raise KeyboardTrackingError("No input devices found")
             
-            # Set up window focus tracking
             await self.compositor.setup_focus_tracking(self._on_window_focus_change)
 
-            # Start with current window if any
             current_window = await self.compositor.get_active_window()
             if current_window:
                 await self._on_window_focus_change(current_window)
             
             self.is_running = True
             await self._monitor_all_devices()
-            # logger.debug("Input tracking started")
             
         except Exception as e:
-            raise KeyboardTrackingError(f"Failed to start tracking: {e}")
+            logger.error(f"Failed to start tracking: {e}")
     
     async def stop(self) -> None:
         """Stop tracking keyboard and mouse events."""
-        try:
-            # logger.debug("Stopping input tracking...")
-            self.is_running = False
-            
-            # End current session if exists
-            if self.current_session:
-                await self.current_session.end_session(datetime.now())
-                self.current_session = None
-            
-            # Cancel all tasks
-            for task in self._device_tasks:
-                task.cancel()
-            
-            # Close devices
-            for device in self.devices:
-                try:
-                    device.close()
-                except Exception as e:
-                    logger.warning(f"Error closing device: {e}")
-            
-            self.devices = []
-            
-        except Exception as e:
-            raise KeyboardTrackingError(f"Failed to stop tracking: {e}")
-    
-    async def get_events(self) -> Dict[str, Any]:
-        """Get collected events and reset counters.
+        self.is_running = False
 
-        Returns:
-            Dict containing window sessions and event totals
-        """
-        # Get current window info
-        current_window = await self.compositor.get_active_window()
-
-        # End current session and get the data
-        session_data = None
+        # End current session if exists
         if self.current_session:
             await self.current_session.end_session(datetime.now())
-            if self.privacy_config.is_private(self.current_session.window_info):
-                # Keep metadata but replace events with privacy filter
-                session_data = {
-                    'window_class': self.current_session.window_info['class'],
-                    'window_title': self.current_session.window_info['title'],
-                    'duration': self.current_session.duration,
-                    'start_time': self.current_session.start_time.isoformat(),
-                    'end_time': self.current_session.end_time.isoformat(),
-                    'privacy_filtered': True,
-                    'key_count': self.current_session.key_count,
-                    'click_count': self.current_session.click_count,
-                    'scroll_count': self.current_session.scroll_count,
-                    'key_events': [],  # Empty events list
-                    'click_events': [],
-                    'scroll_events': []
-                }
-            else:
-                session_data = await self.current_session.to_dict()
             self.current_session = None
 
-        # Process pending sessions
-        sessions = []
-        for session in self.pending_sessions:
-            if self.privacy_config.is_private(session.window_info):
-                # Keep metadata but replace events with privacy filter
-                sessions.append({
-                    'window_class': session.window_info['class'],
-                    'window_title': session.window_info['title'],
-                    'duration': session.duration,
-                    'start_time': session.start_time.isoformat(),
-                    'end_time': session.end_time.isoformat(),
-                    'privacy_filtered': True,
-                    'key_count': session.key_count,
-                    'click_count': session.click_count,
-                    'scroll_count': session.scroll_count,
-                    'key_events': [],  # Empty events list
-                    'click_events': [],
-                    'scroll_events': []
-                })
-            else:
-                sessions.append(await session.to_dict())
-
-        if session_data:
-            sessions.append(session_data)
-
-        events = {
-            "window_sessions": sessions,
-            "counts": {
-                "total_keys_pressed": self._total_keys,
-                "total_clicks": self._total_clicks,
-                "total_scrolls": self._total_scrolls
-            },
-            "timestamp": datetime.now().isoformat()
-        }
-
-        # Clear pending sessions and reset counters
-        self.pending_sessions = []
-        self._total_keys = 0
-        self._total_clicks = 0
-        self._total_scrolls = 0
-
-        # Create new session with the active window
-        if current_window:
-            await self._on_window_focus_change(current_window)
-
-        return events
-
-    async def get_recent_sessions(self, seconds: int = 60) -> List[WindowSession]:
-        """Get recent sessions from buffer.
+        # Cancel all monitoring tasks
+        for task in self._device_tasks:
+            task.cancel()
         
-        Args:
-            seconds: Number of seconds of history to return
+        # Close all devices
+        for device in self.devices:
+            try:
+                device.close()
+            except Exception as e:
+                logger.warning(f"Error closing device: {e}")
+
+        self.devices = []
+        self._device_tasks = []
+
+    # async def get_recent_sessions(self, seconds: int = 60) -> List[WindowSession]:
+    #     """Get recent sessions from buffer.
+        
+    #     Args:
+    #         seconds: Number of seconds of history to return
             
-        Returns:
-            List of recent WindowSession objects
-        """
-        now = datetime.now()
-        return [
-            session for session in self.recent_sessions
-            if (now - session.end_time).total_seconds() <= seconds
-        ]
+    #     Returns:
+    #         List of recent WindowSession objects
+    #     """
+    #     now = datetime.now()
+    #     return [
+    #         session for session in self.recent_sessions
+    #         if (now - session.end_time).total_seconds() <= seconds
+    #     ]

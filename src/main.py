@@ -61,7 +61,7 @@ class MemorySystemCLI:
         cli = cls(config, db, ontology_manager)
         
         # Initialize activity manager
-        cli.activity_manager = ActivityManager()
+        cli.activity_manager = ActivityManager(config)
         
         # Start tracking, video, and audio
         await cli.activity_manager.start_recording()
@@ -99,28 +99,6 @@ class MemorySystemCLI:
         )
 
         await cli.assistant_agent.start()
-        
-        # Register hotkeys
-        for hotkey_name, hotkey_data in config["hotkeys"].items():
-            if hotkey_name == "speak_hotkey":
-                hotkey_type = HotkeyEventType.SPEAK
-            # Add more conditions if you have more hotkey types
-
-            async def hotkey_action(event, hotkey_type=hotkey_type):
-                # The callback now receives the hotkey_type as an argument
-                if hotkey_type == HotkeyEventType.SPEAK:
-                    if not cli.activity_manager.audio_recorder.is_recording:
-                        await cli.activity_manager.start_recording()
-                    else:
-                        await cli.activity_manager.stop_recording()
-                # Add more conditions to handle other hotkey types
-            
-            # Register the hotkey with the correct type
-            cli.activity_manager.register_hotkey(
-                hotkey=hotkey_data,
-                hotkey_type=hotkey_type,  # Pass the HotkeyEventType here
-                callback=hotkey_action
-            )
 
         return cli
 

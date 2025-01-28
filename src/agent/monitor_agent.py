@@ -54,7 +54,7 @@ class MonitorAgent(BaseAgent):
             # Monitoring state
             self.is_monitoring = False
             self.monitor_thread = None
-            self.collection_interval = self.config["tracking"].get("activity_log_interval", 10)
+            self.collection_interval = self.config["tracking"].get("activity_log_interval", 30)
             self.session_id = session_id
             self.activity_manager = activity_manager
             
@@ -76,6 +76,7 @@ class MonitorAgent(BaseAgent):
             if not self.is_monitoring:
                 # Enable persistence in the input tracker
                 await self.activity_manager.input_tracker.enable_persistence()
+                activity_data = await self.activity_manager.input_tracker.get_events()
                 
                 self.is_monitoring = True
                 self.monitor_task = asyncio.create_task(self._monitoring_loop())
@@ -153,6 +154,10 @@ class MonitorAgent(BaseAgent):
                 "total_clicks": raw_activity_data["counts"]["total_clicks"],
                 "total_scrolls": raw_activity_data["counts"]["total_scrolls"]
             }
+            
+            storage_data_copy = storage_data.copy()
+            storage_data_copy["screenshot"] = "screenshot"
+            self.logger.debug(f"Storing activity data: {storage_data_copy}")
             
             try:
                 # Directly add entity using database interface

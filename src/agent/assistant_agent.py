@@ -66,7 +66,7 @@ class AssistantAgent(BaseAgent):
 
                 # Subscribe to hotkey events
                 await self.event_system.broadcaster.subscribe_hotkey(
-                    HotkeyEventType.SPEAK,
+                    HotkeyEventType.HOTKEY_SPEAK,
                     self._handle_hotkey
                 )
                 
@@ -125,7 +125,7 @@ class AssistantAgent(BaseAgent):
         """Start audio recording."""
         try:
             self.is_recording = True
-            await self.activity_manager.start_recording()
+            await self.activity_manager.start_audio_recording()
             self.logger.debug("Recording started...")
 
             if self.tts_engine:
@@ -142,7 +142,7 @@ class AssistantAgent(BaseAgent):
         """Stop audio recording."""
         try:
             self.is_recording = False
-            await self.activity_manager.stop_recording()
+            await self.activity_manager.stop_audio_recording()
             self.logger.debug("Recording stopped...")
             
         except Exception as e:

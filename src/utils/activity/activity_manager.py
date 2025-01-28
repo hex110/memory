@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import Dict, List, Optional, Callable, Any
 from pathlib import Path
 import asyncio
@@ -8,8 +9,9 @@ from src.utils.activity.compositor.base_compositor import BaseCompositor
 from src.utils.activity.compositor.hyprland import HyprlandCompositor
 from src.utils.activity.trackers.screencapture import ScreenCapture
 from src.utils.activity.trackers.audio_recorder import AudioRecorder
-from src.utils.activity.trackers.inputs.base import BaseInputTracker
+from src.utils.activity.trackers.inputs.baseinput import BaseInputTracker
 from src.utils.activity.trackers.inputs.evdev import EvdevInputTracker
+from src.utils.activity.trackers.inputs.pynput import PynputInputTracker
 from src.utils.activity.trackers.privacy import PrivacyConfig
 from src.utils.events import HotkeyEvent, HotkeyEventType
 
@@ -18,18 +20,22 @@ logger = logging.getLogger(__name__)
 class ActivityManager:
     """Manages screen capture, audio recording, and input tracking."""
 
-    def __init__(self, privacy_config_path: str = "src/utils/activity/privacy.json"):
+    def __init__(self, config: Dict[str, Any], privacy_config_path: str = "src/utils/activity/privacy.json"):
         """Initialize ActivityManager.
 
         Args:
             privacy_config_path: Path to the privacy configuration file.
         """
+        self.video_duration = config["tracking"].get("video_duration", 30)
+        self.hotkeys = config["hotkeys"]
+
         self.privacy_config = PrivacyConfig(privacy_config_path)
         self.compositor = self._get_compositor()
+        self.hotkey_actions: Dict[HotkeyEventType, List[Callable]] = {}
         self.input_tracker = self._get_input_tracker()
         self.screen_capture = self._get_screen_capture()
         self.audio_recorder = AudioRecorder()
-        self.hotkey_actions: Dict[str, Dict[str, Callable]] = {}
+
 
     def _get_compositor(self) -> BaseCompositor:
         """Detect and return the appropriate compositor instance."""
@@ -46,15 +52,36 @@ class ActivityManager:
         """Detect and return the appropriate compositor instance."""
         system = platform.system()
         if system == "Linux":
-            return EvdevInputTracker(self.compositor, self.privacy_config, hotkeys={})
-        
-        raise NotImplementedError(
-            f"Input tracker detection for {system} is not yet supported."
-        )
+            # Check if it's Wayland or X11, you might need a better detection method
+            if "WAYLAND_DISPLAY" in os.environ:
+                return EvdevInputTracker(self.compositor, self.privacy_config, self.hotkeys)
+            else:
+                return PynputInputTracker(self.compositor, self.privacy_config, self.hotkeys)
+        elif system == "Windows":
+            return PynputInputTracker(self.compositor, self.privacy_config, self.hotkeys)
+        elif system == "Darwin":  # macOS
+            return PynputInputTracker(self.compositor, self.privacy_config, self.hotkeys)
+        else:
+            raise NotImplementedError(f"Input tracker not supported on {system}")
     
-    def _get_screen_capture(self, backend: str = "grim") -> ScreenCapture:
+    def _get_screen_capture(self, backend: Optional[str] = None) -> ScreenCapture:
         """Get the screen capture instance."""
-        return ScreenCapture(self.compositor, self.privacy_config, backend=backend)
+        if backend is None:
+            system = platform.system()
+            if system == "Linux":
+                # Check if it's Wayland or X11, you might need a better detection method
+                if "WAYLAND_DISPLAY" in os.environ:
+                    backend = "grim"  # Default for Wayland
+                else:
+                    backend = "mss"  # Fallback for X11 or if detection fails
+            elif system == "Windows":
+                backend = "mss"
+            elif system == "Darwin":  # macOS
+                backend = "mss"
+            else:
+                raise NotImplementedError(f"Screen capture backend not specified for {system}")
+
+        return ScreenCapture(self.compositor, self.privacy_config, backend=backend, video_duration=self.video_duration)
 
     async def start_recording(self):
         """Start video, audio recording, and input tracking."""
@@ -119,6 +146,14 @@ class ActivityManager:
     def get_video_buffer(self) -> Optional[bytes]:
         """Get the video buffer from the ScreenCapture."""
         return self.screen_capture.get_video_buffer()
+    
+    async def start_audio_recording(self):
+        """Start audio recording."""
+        await self.audio_recorder.start_recording()
+    
+    async def stop_audio_recording(self):
+        """Stop audio recording."""
+        await self.audio_recorder.stop_recording()
     
     def register_hotkey(self, hotkey: str, hotkey_type: HotkeyEventType, callback: Callable):
         """Registers a hotkey action with the InputTracker.
