@@ -17,13 +17,11 @@ This document outlines the current status and future plans for the memory tool. 
 *   [x] **CLI Interface:** Provides a basic CLI to control tracking and access logs.
 *   [x] **Basic Analysis Workflow:** Core workflow of analysis working at 30 sec, 5 min and end of session.
 *   [x] **Codebase Refactor:** Initial restructure of the code for async support.
+*   [X] **Assistant Agent Input:** Making it so the assistant agent can record and receive voice messages.
 
 ## In Progress
 
 *   [ ] **Analysis Improvement:** Refining the analysis workflow and data processing.
-*   [ ] **Code Restructure**: Code quality improvement
-*   [ ] **Privacy Enhancement:** Improving privacy filters (Audio)
-*   [ ] **Assistant Agent Input:** Making it so the assistant agent can record and receive voice messages.
 *   [ ] **Database Migration:** Implementing database schema migrations.
 
 ## Upcoming Features (Todo)
