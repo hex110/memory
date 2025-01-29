@@ -205,7 +205,7 @@ class BaseAgent(AgentInterface):
             config_kwargs = {k: v for k, v in kwargs.items() 
                            if k not in ['tools', 'tool_config', 'function_call']}
 
-            self.logger.debug("Calling LLM")
+            # self.logger.debug("Calling LLM")
 
             # Always use streaming if TTS is enabled
             use_stream = streaming or tts

@@ -157,7 +157,7 @@ class MonitorAgent(BaseAgent):
             
             storage_data_copy = storage_data.copy()
             storage_data_copy["screenshot"] = "screenshot"
-            self.logger.debug(f"Storing activity data: {storage_data_copy}")
+            # self.logger.debug(f"Storing activity data: {storage_data_copy}")
             
             try:
                 # Directly add entity using database interface
