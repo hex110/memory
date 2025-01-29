@@ -24,7 +24,16 @@ A Python-based project for managing and analyzing conversations using Language L
     pip install -r requirements.txt
     ```
 
-4. **Run the application for the first time:**
+4. **Rename `.env.example` and get your API key:**
+
+    *   Rename the `.env.example` file to `.env`.
+    *   Obtain your free Gemini API key from [https://aistudio.google.com/apikey](https://aistudio.google.com/apikey) and paste it into your `.env` file like this:
+
+    ```
+    GEMINI_API_KEY=your_api_key_here
+    ```
+
+5. **Run the application for the first time:**
 
     ```bash
     python -m src.main
