@@ -184,7 +184,6 @@ class AssistantAgent(BaseAgent):
         
         # Retrieve audio from activity manager
         audio_filepath = self.activity_manager.get_audio_filepath()
-
         if not audio_filepath:
             self.logger.error("No recording available to process")
             return

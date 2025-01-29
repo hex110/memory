@@ -121,7 +121,7 @@ class BaseAgent(AgentInterface):
                         class_instances[module_path] = class_(self.db)
                     elif tool_def.category == "context":
                         class_instances[module_path] = class_(
-                            db=self.db,
+                            db=getattr(self, 'db', None),
                             activity_manager=getattr(self, 'activity_manager', None)
                         )
                     elif tool_def.category == "interaction":

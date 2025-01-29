@@ -54,6 +54,10 @@ class ScreenCapture:
         if self.recording:
             return
 
+        if self.video_duration == 0:
+            logger.info("Video duration is 0, not recording")
+            return
+
         self.recording = True
         # Clear the temporary directory on start
         self._clear_temp_dir()
@@ -130,6 +134,10 @@ class ScreenCapture:
     async def get_video_buffer(self) -> Optional[bytes]:
         """Create MP4 video from saved frames."""
         if not self.frame_filenames:
+            return None
+        
+        if self.video_duration == 0:
+            logger.info("Video duration is 0, not creating video")
             return None
 
         try:
