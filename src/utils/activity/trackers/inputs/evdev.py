@@ -81,6 +81,8 @@ class EvdevInputTracker(BaseInputTracker):
                     key_name = evdev.ecodes.keys.get(event.code)
                     if isinstance(key_name, list):
                         key_name = key_name[0]
+                    elif isinstance(key_name, tuple):
+                        key_name = key_name[0]
                     # logger.debug(f"Key name: {key_name}, event value: {event.value}")
 
                     # Simplify handling mouse button and keyboard keys

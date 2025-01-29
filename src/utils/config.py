@@ -23,11 +23,14 @@ def get_default_config() -> Dict[str, Any]:
             "model": "gemini-2.0-flash-exp"
         },
         "tracking": {
-            "activity_log_interval": 30
+            "activity_log_interval": 30,
+            "video_duration": 30
         },
         "hotkeys": {
-            "speak_hotkey": ["KEY_LEFTCTRL", "KEY_X"]
+            "hotkey_speak": ["leftctrl", "x"]
         },
+        "enable_tutorial": True,
+        "tts_enabled": False
     }
 
 def load_env_vars():

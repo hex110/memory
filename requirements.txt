@@ -3,7 +3,7 @@ requests
 jinja2
 jsonschema
 typing_extensions
-google-genai
+google-genai==0.6.0
 json-repair
 pydantic
 fastapi

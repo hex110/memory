@@ -24,73 +24,74 @@ A Python-based project for managing and analyzing conversations using Language L
     pip install -r requirements.txt
     ```
 
-4. **Configure environment variables:**
-
-    - Copy `.env.example` to `.env`:
-
-        ```bash
-        cp .env.example .env
-        ```
-
-    - Fill in your API keys and database credentials in the `.env` file.
-
-5. **Set up the database:**
-
-    First, ensure PostgreSQL is installed and running:
-
-    - **Arch Linux:**
-        ```bash
-        # Install PostgreSQL
-        sudo pacman -S postgresql
-
-        # Initialize the database (first time only)
-        sudo -u postgres initdb -D /var/lib/postgres/data
-
-        # Start PostgreSQL service
-        sudo systemctl start postgresql
-        ```
-
-    - **Ubuntu/Debian:**
-        ```bash
-        # Install PostgreSQL
-        sudo apt install postgresql
-
-        # PostgreSQL service starts automatically
-        # Check status if needed:
-        sudo systemctl status postgresql
-        ```
-
-    - **macOS:**
-        ```bash
-        # Install PostgreSQL
-        brew install postgresql
-
-        # Start PostgreSQL service
-        brew services start postgresql
-        ```
-
-    Then, set up the database and user:
+4. **Run the application for the first time:**
 
     ```bash
-    # Create a PostgreSQL user matching your system user
-    sudo -u postgres createuser -s $USER
-
-    # Create the database
-    createdb memory_db
+    python -m src.main
     ```
 
-    If you prefer to use different credentials:
-    1. Create a custom user and database:
-        ```bash
-        # Connect to PostgreSQL
-        sudo -u postgres psql
+   This will start the application and guide you through a first-time setup tutorial for PostgreSQL and optionally Google Cloud Text-to-Speech.
 
-        # In the PostgreSQL prompt:
+## First-Time Setup Tutorial
+
+The first time you run the application, a tutorial will guide you through setting up the necessary components.
+
+### PostgreSQL Setup
+
+The application uses PostgreSQL as its database. The tutorial will provide instructions based on your operating system:
+
+-   **Linux (Arch):**
+    ```bash
+    sudo pacman -S postgresql
+    sudo -u postgres initdb -D /var/lib/postgres/data  # Initialize (first time)
+    sudo systemctl start postgresql
+    ```
+-   **Linux (Ubuntu/Debian):**
+    ```bash
+    sudo apt install postgresql
+    # Service usually starts automatically
+    ```
+-   **macOS:**
+    ```bash
+    brew install postgresql
+    brew services start postgresql
+    ```
+-   **Windows:**
+    -   Download the installer from: [https://www.postgresql.org/download/windows/](https://www.postgresql.org/download/windows/)
+    -   Run the installer and follow the instructions.
+
+After installing, you need to create the database and potentially a user:
+
+1. Create a PostgreSQL user matching your system user (for peer authentication):
+
+    ```bash
+    sudo -u postgres createuser -s $USER
+    ```
+
+2. Create the database:
+
+    ```bash
+    sudo -u postgres createdb memory_db
+    ```
+
+    **OR (if you want a custom user):**
+
+    1. Connect to PostgreSQL:
+
+        ```bash
+        sudo -u postgres psql
+        ```
+
+    2. In the PostgreSQL prompt:
+
+        ```sql
         CREATE USER your_user WITH PASSWORD 'your_password';
         CREATE DATABASE memory_db OWNER your_user;
         \q
         ```
-    2. Update the credentials in your `.env` file:
+
+    3. Update your `.env` file with the credentials:
+
         ```
         DB_HOST=localhost
         DB_NAME=memory_db
@@ -98,46 +99,58 @@ A Python-based project for managing and analyzing conversations using Language L
         DB_PASSWORD=your_password
         ```
 
-    Common issues:
-    - If you get "peer authentication failed", you may need to edit `pg_hba.conf`
-    - If you get "database does not exist", run `createdb memory_db`
-    - If you get "permission denied", ensure your user has the correct privileges
+### Google Cloud Text-to-Speech (Optional)
 
-## Project Structure
+If you want to use speech features, you can set up Google Cloud Text-to-Speech for free (up to 4 million characters a month (plenty)):
 
-- **src/**: Main source code directory
-    - **agent/**: Contains LLM agent implementations
-        - **prompts/**: System and query prompts for different agents
-    - **api/**: FastAPI server implementation
-    - **database/**: Database connection and operations
-    - **interfaces/**: API interface definitions
-    - **schemas/**: Data model definitions
-        - **definitions.py**: Single source of truth for database schema
-    - **tests/**: Unit and integration tests
-- **scripts/**: Utility scripts
-    - `backup_db.sh`: Database backup and reset utility
-- **backups/**: Database backup files
-- `.gitignore`: Files and directories to ignore in git
-- `README.md`: Project documentation
-- `requirements.txt`: Project dependencies
+1. **Create a Google Cloud project:** [https://console.cloud.google.com/projectcreate](https://console.cloud.google.com/projectcreate)
+2. **Enable billing** for your project.
+3. **Enable the Text-to-Speech API:** [https://console.cloud.google.com/speech/text-to-speech](https://console.cloud.google.com/speech/text-to-speech)
+4. **Install the Google Cloud SDK:** [https://cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install)
+5. **Authenticate:**
+    ```bash
+    gcloud auth application-default login
+    ```
+    Select your project during this step.
+
+The tutorial will ask if you want to configure TTS. You can skip it and enable it later by editing `config.json`.
 
 ## Running the Project
 
 The application has two main modes:
 
-1. **Start the API server:**
+1. **Start Tracking**:
 
     ```bash
-    python -m src.main -server
+    python -m src.main
     ```
+    And then choose "Start Tracking"
 
-2. **Run conversation analysis:**
+2. **Start the API server:**
+    ```bash
+    python -m src.main
+    ```
+    And then choose "Start Server"
+
+3. **Run conversation analysis:**
 
     ```bash
-    python -m src.main -analyze
+    python -m src.main
     ```
+
+    And then choose "Analyze Session"
 
 The API will be available at `http://localhost:8000`.
+
+**Monitoring Logs:**
+
+Open a separate terminal and run:
+
+```bash
+tail -F Memory/memory_system.log
+```
+
+Keep this terminal side-by-side with the main application terminal to view logs in real time.
 
 ## Database Management
 
@@ -158,9 +171,10 @@ Use `scripts/backup_db.sh` for database backups and resets:
     ```
 
     This will:
-    - Create a backup
-    - Drop the existing database
-    - Create a fresh database
+
+    -   Create a backup
+    -   Drop the existing database
+    -   Create a fresh database
 
     *Note:* Restart the application to initialize the new schema.
 
@@ -169,26 +183,39 @@ Use `scripts/backup_db.sh` for database backups and resets:
 The project uses a simple, direct schema management approach:
 
 1. **Schema Definition**:
-   - All database schemas are defined in `src/schemas/definitions.py`
-   - This file is the single source of truth for database structure
-   - Used by both database initialization and agent validation
+    -   All database schemas are defined in `src/schemas/definitions.py`
+    -   This file is the single source of truth for database structure
+    -   Used by both database initialization and agent validation
 
 2. **Making Schema Changes**:
-   ```bash
-   # 1. Update schema in src/schemas/definitions.py
-   # 2. Backup and reset the database:
-   ./scripts/backup_db.sh --reset
-   # 3. Restart the application to apply new schema
-   ```
+
+    ```bash
+    # 1. Update schema in src/schemas/definitions.py
+    # 2. Backup and reset the database:
+    ./scripts/backup_db.sh --reset
+    # 3. Restart the application to apply new schema
+    ```
 
 3. **Database Reset**:
-   - Creates a backup of current data
-   - Drops all tables
-   - Recreates tables using current schema from definitions.py
-   - Fast and reliable way to update database structure
+    -   Creates a backup of current data
+    -   Drops all tables
+    -   Recreates tables using current schema from definitions.py
+    -   Fast and reliable way to update database structure
 
 This approach favors simplicity and maintainability over version tracking, making it ideal for active development.
 
 ## License
 
 This project is licensed under the European Union Public License 1.2 (EUPL-1.2). This license applies to all files in this repository and all previous commits, regardless of their date. The EUPL is a copyleft license that is compatible with several other open-source licenses, including the GPLv2, GPLv3, AGPLv3, and others (see the Appendix of the license for the full list of compatible licenses).
+```
+
+**4. `config.json`**
+
+Make sure to add the following two fields to your `config.json`:
+
+```json
+{
+    "enable_tutorial": true,
+    "tts_enabled": false
+}
+```

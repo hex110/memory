@@ -203,7 +203,7 @@ class AssistantAgent(BaseAgent):
             })
             
             # Get recent context and video
-            context = await self._get_recent_context()
+            # context = await self._get_recent_context()
             # videos = []
             # video_buffer = await self.activity_manager.get_video_buffer()
             # if video_buffer:
@@ -215,7 +215,7 @@ class AssistantAgent(BaseAgent):
                 self.logger.debug("Starting new conversation")
 
             # Add context to user prompt
-            user_prompt = f"{context}\n\n{user_prompt}"
+            # user_prompt = f"{context}\n\n{user_prompt}"
 
             # Add user message to history
             self.message_history.append({

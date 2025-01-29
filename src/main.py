@@ -11,6 +11,10 @@ import platform
 from typing import Dict, Any, List
 from InquirerPy import inquirer
 
+import warnings
+
+warnings.filterwarnings("ignore", category=UserWarning, module="pydantic") # getting pydantic warning for a google-genai file, and I don't want to modify the library file, so suppressing it for now
+
 from src.utils.config import load_config_and_logging
 from src.database.postgresql import PostgreSQLDatabase
 from src.utils.logging import get_logger, configure_logging
@@ -19,10 +23,11 @@ from src.agent.analysis_agent import AnalysisAgent
 from src.agent.assistant_agent import AssistantAgent
 from src.ontology.manager import OntologyManager
 from src.utils.activity.activity_manager import ActivityManager
-from src.utils.events import HotkeyEventType
+from src.utils.tts import TTSEngine
 from uvicorn import Config, Server
 
-from src.utils.tts import TTSEngine
+# Import tutorial from utils
+from src.utils.tutorial import run_tutorial, is_postgres_running
 
 configure_logging()
 
@@ -51,11 +56,25 @@ class MemorySystemCLI:
         # Add new field for activity manager
         self.activity_manager = None
         self.tts_engine = None
+
     @classmethod
     async def create(cls, config: Dict[str, Any]) -> 'MemorySystemCLI':
         """Create and initialize a new CLI instance."""
-        db = await PostgreSQLDatabase.create(config["database"])
-        ontology_manager = await OntologyManager.create()
+        
+        # Initialize database and ontology manager
+        db = None
+        ontology_manager = None
+        if not config.get("enable_tutorial", True):  # Only connect if tutorial is completed
+            try:
+                db = await PostgreSQLDatabase.create(config["database"])
+                ontology_manager = await OntologyManager.create()
+            except Exception as e:
+                logger.error(f"Database connection failed: {e}")
+                if not is_postgres_running():
+                    attempt_start_postgres()
+                else:
+                    logger.info("Please ensure PostgreSQL is installed and running.")
+                # return  # Exit if database connection fails
 
         # Create instance
         cli = cls(config, db, ontology_manager)
@@ -67,7 +86,7 @@ class MemorySystemCLI:
         await cli.activity_manager.start_recording()
         
         # Initialize TTS engine
-        cli.tts_engine = await TTSEngine.create()
+        cli.tts_engine = await TTSEngine.create(config.get("tts_enabled", False))
         
         # Create agents with components
         cli.monitor_agent = MonitorAgent(
@@ -333,17 +352,56 @@ class MemorySystemCLI:
             if self.db:
                 # logger.debug("Closing database connection")
                 await self.db.close()
+            
+            if self.tts_engine:
+                # logger.debug("Closing TTS engine")
+                await self.tts_engine.cleanup()
                 
             logger.info("Cleanup completed successfully")
                 
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
 
+def attempt_start_postgres():
+    """Attempts to start the PostgreSQL service."""
+    logger.info("Attempting to start PostgreSQL service...")
+    print("Attempting to start PostgreSQL service...")
+    try:
+        if platform.system() == "Linux":
+            subprocess.run(["sudo", "systemctl", "start", "postgresql"], check=True)
+        elif platform.system() == "Darwin":
+            subprocess.run(["brew", "services", "start", "postgresql"], check=True)
+        else:
+            logger.warning("Automatic start not supported for this platform. Please start PostgreSQL manually.")
+            return
+
+        logger.info("PostgreSQL service started successfully.")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to start PostgreSQL: {e}")
+        logger.info("Please start PostgreSQL manually and try again.")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred when trying to start PostgreSQL: {e}")
+
 async def async_main():
     """Async main entry point."""
     try:
         config = load_config_and_logging()
-        cli = await MemorySystemCLI.create(config)
+        
+        # Run tutorial if enabled
+        await run_tutorial(Path(__file__).parent / "config.json")
+
+        # Create the CLI instance
+        cli = None  # Initialize cli to None
+        while cli is None:  # Keep trying until cli is successfully created
+            try:
+                # Create the CLI instance
+                cli = await MemorySystemCLI.create(config)
+                if cli is None:  # Check if create() still returned None
+                    logger.error("Failed to create MemorySystemCLI instance. Retrying...")
+                    await asyncio.sleep(1)  # Wait a bit before retrying
+            except Exception as e:
+                logger.error("Error in async_main", {"error": str(e)}, exc_info=True)
+                await asyncio.sleep(1)
         
         loop = asyncio.get_event_loop()
         signals = (signal.SIGTERM, signal.SIGINT)

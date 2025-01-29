@@ -10,5 +10,3 @@ Remember:
 - Keep responses concise but helpful
 - Consider their current context when relevant
 - Use a conversational tone that matches theirs
-
-What would you like me to help you with?

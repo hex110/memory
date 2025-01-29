@@ -1,6 +1,4 @@
 """Text-to-speech utilities using Google Cloud TTS."""
-
-import logging
 import subprocess
 from typing import Optional, AsyncIterator, Tuple
 from pathlib import Path
@@ -10,57 +8,84 @@ from collections.abc import AsyncIterable
 
 from google.cloud import texttospeech
 
+from src.utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 class TTSEngine:
     """Wrapper for Google Cloud Text-to-Speech."""
     
-    def __init__(self):
+    def __init__(self, tts_enabled: bool):
         """Initialize basic attributes synchronously."""
-        self.logger = logging.getLogger(__name__)
-        self.client = None
+        self.client : texttospeech.TextToSpeechAsyncClient = None
         self.standard_voice = None
         self.journey_voice = None
         self.audio_config = None
-        self.audio_player = None
+        self.audio_player : AudioPlayer = None
+        self.tts_enabled = tts_enabled
+
+        # if self.tts_enabled:
+        #     logger.info("TTS is enabled. Initializing TTSEngine...")
+        # else:
+        #     logger.info("TTS is disabled. TTSEngine will be a no-op.")
 
     @classmethod
-    async def create(cls):
+    async def create(cls, tts_enabled: bool):
         """Async factory method to properly initialize the TTSEngine."""
-        instance = cls()
-        try:
-            instance.client = texttospeech.TextToSpeechAsyncClient()
-            instance.standard_voice = texttospeech.VoiceSelectionParams(
-                language_code="en-US",
-                name="en-US-Standard-H",  # Standard voice
-                ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
-            )
-            instance.journey_voice = texttospeech.VoiceSelectionParams(
-                language_code="en-US",
-                name="en-US-Journey-F", # Journey voice for streaming
-                ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
-            )
-            instance.audio_config = texttospeech.AudioConfig(
-                audio_encoding=texttospeech.AudioEncoding.MP3
-            )
-            # Add AudioPlayer instance
-            instance.audio_player = AudioPlayer()
-            await instance.audio_player.start()
+        instance = cls(tts_enabled)
+        if tts_enabled:
+            try:
+                # instance.client = texttospeech.TextToSpeechAsyncClient() # gives error
+                # instance.client = texttospeech.TextToSpeechAsyncClient(transport="rest") # doesn't work
+                instance.client = texttospeech.TextToSpeechClient(transport="rest") # somehow works? we have to use sync client instead of async, and while we're waiting for the response, the cli is blocked, but it works, and it can be fixed probably
+                instance.standard_voice = texttospeech.VoiceSelectionParams(
+                    language_code="en-US",
+                    name="en-US-Standard-H",  # Standard voice
+                    ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
+                )
+                instance.journey_voice = texttospeech.VoiceSelectionParams(
+                    language_code="en-US",
+                    name="en-US-Journey-F", # Journey voice for streaming
+                    ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
+                )
+                instance.audio_config = texttospeech.AudioConfig(
+                    audio_encoding=texttospeech.AudioEncoding.MP3
+                )
+                # Add AudioPlayer instance
+                instance.audio_player = AudioPlayer()
+                await instance.audio_player.start()
 
-            # instance.logger.info("TTSEngine initialized successfully")
-            return instance
+                # logger.info("TTSEngine initialized successfully")
+                
+            except Exception as e:
+                logger.error("Failed to initialize TTSEngine", extra={"error": str(e)})
+                raise
         
+        return instance
+
+    async def cleanup(self):
+        """Cleanup TTS engine resources."""
+        try:
+            if self.tts_enabled:
+                # Stop the audio player
+                await self.audio_player.stop()
+                
         except Exception as e:
-            instance.logger.error("Failed to initialize TTSEngine", extra={"error": str(e)})
-            raise
+            logger.error("Failed to cleanup TTSEngine", extra={"error": str(e)}, exc_info=True)
 
     async def play_text(self, text: str):
         """Play complete text through TTS."""
+        if not self.tts_enabled:
+            logger.info("TTS is disabled. Skipping playback.")
+            return
+            
         try:
             audio_data = await self._synthesize_speech(text)
             if audio_data:
                 async with self.audio_semaphore:
                     await self.audio_player.play_audio(audio_data)
         except Exception as e:
-            self.logger.error("Failed to play text", extra={"error": str(e)})
+            logger.error("Failed to play text", extra={"error": str(e)})
 
     async def play_stream(self, text_stream: AsyncIterable[str]):
         """Play streaming text through TTS.
@@ -68,6 +93,10 @@ class TTSEngine:
         Handles receiving text chunks, forming complete sentences,
         and playing them as they become available.
         """
+        if not self.tts_enabled:
+            logger.info("TTS is disabled. Skipping playback.")
+            return
+            
         try:
             buffer = TextBuffer()
             
@@ -91,16 +120,7 @@ class TTSEngine:
                     await self.audio_player.playback_queue.join()
                 
         except Exception as e:
-            self.logger.error("Failed to play stream", extra={"error": str(e)}, exc_info=True)
-
-    async def cleanup(self):
-        """Cleanup TTS engine resources."""
-        try:
-            # Stop the audio player
-            await self.audio_player.stop()
-                
-        except Exception as e:
-            self.logger.error("Failed to cleanup TTSEngine", extra={"error": str(e)})
+            logger.error("Failed to play stream", extra={"error": str(e)}, exc_info=True)
 
     async def _synthesize_speech(self, text: str) -> Optional[Path]:
         """
@@ -112,22 +132,26 @@ class TTSEngine:
         Returns:
             Path to the generated audio file or None if synthesis failed
         """
+        if not self.tts_enabled:
+            logger.info("TTS is disabled. Skipping synthesis.")
+            return None
+            
         try:
             # Create synthesis input
             synthesis_input = texttospeech.SynthesisInput(text=text)
 
             # Generate speech
-            response = await self.client.synthesize_speech(
+            response = self.client.synthesize_speech(
                 input=synthesis_input,
                 voice=self.standard_voice,
                 audio_config=self.audio_config
             )
-
-            # self.logger.debug(f"Audio content generated for text: {text[:50]}...")
+            # logger.debug(f"Synthesis response received: {response}")
+            # logger.debug(f"Audio content generated for text: {text[:50]}...")
             return response.audio_content
 
         except Exception as e:
-            self.logger.error("Failed to synthesize speech", extra={"error": str(e)})
+            logger.error("Failed to synthesize speech", extra={"error": str(e)}, exc_info=True)
             return None
     
     async def _streaming_synthesize_speech(self, text: str) -> AsyncIterator[bytes]:
@@ -140,6 +164,10 @@ class TTSEngine:
         Returns:
             Async iterator of audio bytes chunks.
         """
+        if not self.tts_enabled:
+            logger.info("TTS is disabled. Skipping synthesis.")
+            return
+            
         try:
             streaming_config = texttospeech.StreamingSynthesizeConfig(
                 voice=self.journey_voice,
@@ -167,7 +195,7 @@ class TTSEngine:
                 yield response.audio_content
 
         except Exception as e:
-            self.logger.error("Failed to stream speech", extra={"error": str(e)}, exc_info=True)
+            logger.error("Failed to stream speech", extra={"error": str(e)}, exc_info=True)
             # return None
 
 
@@ -254,7 +282,7 @@ class AudioPlayer:
         self.playback_queue = asyncio.Queue()
         self.playback_task = None
         self._skip_current = False
-        self.logger = logging.getLogger(__name__)
+        
     async def start(self):
         """Start a single long-running ffplay process and the background playback task."""
         if not self.playback_task or self.playback_task.done():
@@ -289,7 +317,7 @@ class AudioPlayer:
             self.current_process.terminate()
             self.current_process = None
         if self.playback_task:
-            await self.playback_task
+            await self.skip_current()
 
     async def skip_current(self):
         """Skip current audio."""
@@ -321,7 +349,7 @@ class AudioPlayer:
                         self.current_process.stdin.write(audio_data)
                         self.current_process.stdin.flush()
                 except BrokenPipeError:
-                    self.logger.debug("Broken pipe error occurred, restarting ffplay process")
+                    logger.debug("Broken pipe error occurred, restarting ffplay process")
                     # Attempt to restart the process
                     if self.current_process:
                         self.current_process.terminate()
@@ -339,7 +367,7 @@ class AudioPlayer:
                     )
                     await asyncio.sleep(0.1)
                 except Exception as e:
-                    self.logger.debug(f"Error in playback worker: {e}")
+                    logger.debug(f"Error in playback worker: {e}")
                 finally:
                     self._skip_current = False
                     self.playback_queue.task_done()
@@ -347,7 +375,7 @@ class AudioPlayer:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                self.logger.debug(f"Unexpected error in playback worker: {e}")
+                logger.debug(f"Unexpected error in playback worker: {e}")
 
     async def play_stream(self, audio_iterator: AsyncIterable[bytes]):
         """Play streaming PCM audio chunks as they arrive."""
@@ -375,7 +403,7 @@ class AudioPlayer:
                         streaming_process.stdin.write(chunk)
                         streaming_process.stdin.flush()
                     except BrokenPipeError:
-                        self.logger.debug("Broken pipe error occurred in stream playback")
+                        logger.debug("Broken pipe error occurred in stream playback")
                         break
                         
             if streaming_process and streaming_process.stdin:
@@ -383,7 +411,7 @@ class AudioPlayer:
                 streaming_process.terminate()
 
         except Exception as e:
-            self.logger.debug(f"Error in play_stream: {e}")
+            logger.debug(f"Error in play_stream: {e}")
 
 async def tee_stream(stream: AsyncIterable[str]) -> tuple[AsyncIterable[str], AsyncIterable[str]]:
     """Split an async stream into two independent streams that process data as it arrives."""
