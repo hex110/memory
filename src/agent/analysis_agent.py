@@ -111,7 +111,7 @@ class AnalysisAgent(BaseAgent):
             self.logger.error("Failed to stop analysis cycles", extra={
                 "error": str(e),
                 "session_id": self.session_id
-            })
+            }, exc_info=True)
             raise
     
     async def _subscribe_to_events(self):

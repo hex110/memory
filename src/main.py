@@ -145,7 +145,7 @@ class MemorySystemCLI:
                 self.tracking_active = False
                 logger.info("Activity tracking stopped successfully")
         except Exception as e:
-            logger.error("Failed to stop tracking", extra={"error": str(e)})
+            logger.error("Failed to stop tracking", extra={"error": str(e)}, exc_info=True)
 
     async def _start_server(self):
         """Start the API server."""

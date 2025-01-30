@@ -14,6 +14,7 @@ from src.utils.activity.trackers.inputs.evdev import EvdevInputTracker
 from src.utils.activity.trackers.inputs.pynput import PynputInputTracker
 from src.utils.activity.trackers.privacy import PrivacyConfig
 from src.utils.events import HotkeyEvent, HotkeyEventType
+from .macos_coordinator import MacOSCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -21,21 +22,26 @@ class ActivityManager:
     """Manages screen capture, audio recording, and input tracking."""
 
     def __init__(self, config: Dict[str, Any], privacy_config_path: str = "src/utils/activity/privacy.json"):
-        """Initialize ActivityManager.
-
-        Args:
-            privacy_config_path: Path to the privacy configuration file.
-        """
+        """Initialize ActivityManager."""
         self.video_duration = config["tracking"].get("video_duration", 30)
         self.hotkeys = config["hotkeys"]
 
         self.privacy_config = PrivacyConfig(privacy_config_path)
-        self.compositor = self._get_compositor()
+        
+        # Mac OS integration
+        system = platform.system()
+        if system == "Darwin":  # macOS
+            self.coordinator = MacOSCoordinator(self.privacy_config, self.hotkeys, "/compositor/mackeyserver")
+            self.compositor = self.coordinator.compositor
+            self.input_tracker = self.coordinator.input_tracker
+        else:
+            self.coordinator = None
+            self.compositor = self._get_compositor()
+            self.input_tracker = self._get_input_tracker()
+
         self.hotkey_actions: Dict[HotkeyEventType, List[Callable]] = {}
-        self.input_tracker = self._get_input_tracker()
         self.screen_capture = self._get_screen_capture()
         self.audio_recorder = AudioRecorder()
-
 
     def _get_compositor(self) -> BaseCompositor:
         """Detect and return the appropriate compositor instance."""
@@ -43,7 +49,9 @@ class ActivityManager:
         if system == "Linux":
             if "HYPRLAND_INSTANCE_SIGNATURE" in platform.os.environ:
                 return HyprlandCompositor()
-
+        elif system == "Darwin":
+            return self.coordinator.compositor if self.coordinator else None
+        
         raise NotImplementedError(
             f"Compositor detection for {system} is not yet supported."
         )
@@ -60,7 +68,7 @@ class ActivityManager:
         elif system == "Windows":
             return PynputInputTracker(self.compositor, self.privacy_config, self.hotkeys)
         elif system == "Darwin":  # macOS
-            return PynputInputTracker(self.compositor, self.privacy_config, self.hotkeys)
+            return self.coordinator.input_tracker if self.coordinator else None
         else:
             raise NotImplementedError(f"Input tracker not supported on {system}")
     
@@ -85,11 +93,12 @@ class ActivityManager:
 
     async def start_recording(self):
         """Start video, audio recording, and input tracking."""
+        if platform.system() == "Darwin" and self.coordinator:
+            await self.coordinator.start()
         await self.screen_capture.start_recording()
         await self.audio_recorder.start_recording()
-        if not self.input_tracker.is_running:
+        if self.input_tracker and not self.input_tracker.is_running:
             asyncio.create_task(self.input_tracker.start())
-            # self.input_tracker.event_system.broadcaster.on_hotkey(self.handle_hotkey_event)
 
     async def stop_recording(self):
         """Stop video, audio recording, and input tracking.
@@ -97,13 +106,16 @@ class ActivityManager:
         Returns:
             A dictionary containing the audio filepath, video buffer, and window sessions.
         """
-        
-        if self.input_tracker.is_running:
+        if self.input_tracker and self.input_tracker.is_running:
             await self.input_tracker.stop()
             
         audio_filepath = await self.audio_recorder.stop_recording()
         video_buffer = await self.screen_capture.get_video_buffer()
         window_sessions = await self.input_tracker.get_events()
+
+        # Stop the coordinator if it's a macOS system
+        if platform.system() == "Darwin" and self.coordinator:
+            await self.coordinator.stop()
 
         return {
             "audio_filepath": audio_filepath,
@@ -129,11 +141,25 @@ class ActivityManager:
 
     async def get_active_window(self) -> Optional[Dict[str, Any]]:
         """Get information about the active window."""
-        return await self.compositor.get_active_window()
+        # Use the appropriate compositor based on the OS
+        if platform.system() == "Darwin" and self.coordinator:
+            return await self.coordinator.get_active_window()
+        elif self.compositor:
+            return await self.compositor.get_active_window()
+        else:
+            logger.warning("Compositor is not available.")
+            return None
 
     async def get_windows(self) -> List[Dict[str, Any]]:
         """Get a list of all windows."""
-        return await self.compositor.get_windows()
+        # Use the appropriate compositor based on the OS
+        if platform.system() == "Darwin" and self.coordinator:
+            return await self.coordinator.get_windows()
+        elif self.compositor:
+            return await self.compositor.get_windows()
+        else:
+            logger.warning("Compositor is not available.")
+            return []
 
     async def get_recent_sessions(self, seconds: int = 60) -> List[Dict[str, Any]]:
         """Get recent window sessions from the InputTracker."""
@@ -157,7 +183,7 @@ class ActivityManager:
     
     def register_hotkey(self, hotkey: str, hotkey_type: HotkeyEventType, callback: Callable):
         """Registers a hotkey action with the InputTracker.
-           Hotkeys are registered to the input tracker when it is started.
+        Hotkeys are registered to the input tracker when it is started.
         """
         if hotkey_type not in self.hotkey_actions:
             self.hotkey_actions[hotkey_type] = []
@@ -168,8 +194,12 @@ class ActivityManager:
 
     async def cleanup(self):
         """Clean up all resources."""
-        await self.compositor.cleanup()
+        if self.coordinator:
+            await self.coordinator.cleanup()
+        else:
+            if self.compositor:
+                await self.compositor.cleanup()
+            if self.input_tracker and self.input_tracker.is_running:
+                await self.input_tracker.stop()
         await self.screen_capture.cleanup()
         await self.audio_recorder.cleanup()
-        if self.input_tracker.is_running:
-            await self.input_tracker.stop()
