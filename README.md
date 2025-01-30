@@ -1,8 +1,3 @@
-Okay, I've updated the `README.md` with a "For Mac Users" section at the top, providing the necessary instructions. I've also made some minor adjustments to the existing sections for clarity and consistency.
-
-Here's the updated `README.md`:
-
-```markdown
 # Memory Project
 
 A Python-based project for managing and analyzing conversations using Language Learning Models (LLMs).
