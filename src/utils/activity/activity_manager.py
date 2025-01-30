@@ -29,9 +29,10 @@ class ActivityManager:
         self.privacy_config = PrivacyConfig(privacy_config_path)
         
         # Mac OS integration
-        system = platform.system()
-        if system == "Darwin":  # macOS
-            self.coordinator = MacOSCoordinator(self.privacy_config, self.hotkeys, "/compositor/mackeyserver")
+        self.system = platform.system()
+        # self.system = "Darwin" # testing
+        if self.system == "Darwin":  # macOS
+            self.coordinator = MacOSCoordinator(self.privacy_config, self.hotkeys, "src/utils/activity/compositor/mackeyserver")
             self.compositor = self.coordinator.compositor
             self.input_tracker = self.coordinator.input_tracker
         else:
@@ -45,55 +46,52 @@ class ActivityManager:
 
     def _get_compositor(self) -> BaseCompositor:
         """Detect and return the appropriate compositor instance."""
-        system = platform.system()
-        if system == "Linux":
+        if self.system == "Linux":
             if "HYPRLAND_INSTANCE_SIGNATURE" in platform.os.environ:
                 return HyprlandCompositor()
-        elif system == "Darwin":
+        elif self.system == "Darwin":
             return self.coordinator.compositor if self.coordinator else None
         
         raise NotImplementedError(
-            f"Compositor detection for {system} is not yet supported."
+            f"Compositor detection for {self.system} is not yet supported."
         )
 
     def _get_input_tracker(self) -> BaseInputTracker:
         """Detect and return the appropriate compositor instance."""
-        system = platform.system()
-        if system == "Linux":
+        if self.system == "Linux":
             # Check if it's Wayland or X11, you might need a better detection method
             if "WAYLAND_DISPLAY" in os.environ:
                 return EvdevInputTracker(self.compositor, self.privacy_config, self.hotkeys)
             else:
                 return PynputInputTracker(self.compositor, self.privacy_config, self.hotkeys)
-        elif system == "Windows":
+        elif self.system == "Windows":
             return PynputInputTracker(self.compositor, self.privacy_config, self.hotkeys)
-        elif system == "Darwin":  # macOS
+        elif self.system == "Darwin":  # macOS
             return self.coordinator.input_tracker if self.coordinator else None
         else:
-            raise NotImplementedError(f"Input tracker not supported on {system}")
+            raise NotImplementedError(f"Input tracker not supported on {self.system}")
     
     def _get_screen_capture(self, backend: Optional[str] = None) -> ScreenCapture:
         """Get the screen capture instance."""
         if backend is None:
-            system = platform.system()
-            if system == "Linux":
+            if self.system == "Linux":
                 # Check if it's Wayland or X11, you might need a better detection method
                 if "WAYLAND_DISPLAY" in os.environ:
                     backend = "grim"  # Default for Wayland
                 else:
                     backend = "mss"  # Fallback for X11 or if detection fails
-            elif system == "Windows":
+            elif self.system == "Windows":
                 backend = "mss"
-            elif system == "Darwin":  # macOS
+            elif self.system == "Darwin":  # macOS
                 backend = "mss"
             else:
-                raise NotImplementedError(f"Screen capture backend not specified for {system}")
+                raise NotImplementedError(f"Screen capture backend not specified for {self.system}")
 
         return ScreenCapture(self.compositor, self.privacy_config, backend=backend, video_duration=self.video_duration)
 
     async def start_recording(self):
         """Start video, audio recording, and input tracking."""
-        if platform.system() == "Darwin" and self.coordinator:
+        if self.system == "Darwin" and self.coordinator:
             await self.coordinator.start()
         await self.screen_capture.start_recording()
         await self.audio_recorder.start_recording()
@@ -114,7 +112,7 @@ class ActivityManager:
         window_sessions = await self.input_tracker.get_events()
 
         # Stop the coordinator if it's a macOS system
-        if platform.system() == "Darwin" and self.coordinator:
+        if self.system == "Darwin" and self.coordinator:
             await self.coordinator.stop()
 
         return {
@@ -142,7 +140,7 @@ class ActivityManager:
     async def get_active_window(self) -> Optional[Dict[str, Any]]:
         """Get information about the active window."""
         # Use the appropriate compositor based on the OS
-        if platform.system() == "Darwin" and self.coordinator:
+        if self.system == "Darwin" and self.coordinator:
             return await self.coordinator.get_active_window()
         elif self.compositor:
             return await self.compositor.get_active_window()
@@ -153,7 +151,7 @@ class ActivityManager:
     async def get_windows(self) -> List[Dict[str, Any]]:
         """Get a list of all windows."""
         # Use the appropriate compositor based on the OS
-        if platform.system() == "Darwin" and self.coordinator:
+        if self.system == "Darwin" and self.coordinator:
             return await self.coordinator.get_windows()
         elif self.compositor:
             return await self.compositor.get_windows()

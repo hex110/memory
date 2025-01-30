@@ -36,12 +36,31 @@ class BaseInputTracker(abc.ABC):
             "space": [" ", " "],
             "backspace": ["⌫", "⌫"],
             "enter": ["[enter]", "[enter]"], #"enter": ["\n", "\n"],
+            "return": ["[enter]", "[enter]"],
             "tab": ["↹", "↹"],
             "left": ["←", "←"],
             "right": ["→", "→"],
             "up": ["↑", "↑"],
             "down": ["↓", "↓"],
-            #"esc": ["⎋", "⎋"],
+            "delete": ["[delete]", "[delete]"],
+            "deleteforward": ["[delFwd]", "[delFwd]"],
+            "home": ["[home]", "[home]"],
+            "end": ["[end]", "[end]"],
+            "pageup": ["[pgUp]", "[pgUp]"],
+            "pagedown": ["[pgDown]", "[pgDown]"],
+            "escape": ["[esc]", "[esc]"],
+            "f1": ["[f1]", "[f1]"],
+            "f2": ["[f2]", "[f2]"],
+            "f3": ["[f3]", "[f3]"],
+            "f4": ["[f4]", "[f4]"],
+            "f5": ["[f5]", "[f5]"],
+            "f6": ["[f6]", "[f6]"],
+            "f7": ["[f7]", "[f7]"],
+            "f8": ["[f8]", "[f8]"],
+            "f9": ["[f9]", "[f9]"],
+            "f10": ["[f10]", "[f10]"],
+            "f11": ["[f11]", "[f11]"],
+            "f12": ["[f12]", "[f12]"],
             "1": ["1", "!"],
             "2": ["2", "@"],
             "3": ["3", "#"],
@@ -92,6 +111,11 @@ class BaseInputTracker(abc.ABC):
         """
         # Get current window info
         current_window = await self.compositor.get_active_window()
+        # logger.debug(f"Current window: {current_window}")
+        # logger.debug(f"Current session: {self.current_session}")
+        # logger.debug(f"Current session: {self.current_session.window_info if self.current_session else 'None'}, Key events: {self.current_session.key_events if self.current_session else 'None'}")
+        # logger.debug(f"Pending sessions: {len(self.pending_sessions)}")
+        # logger.debug(f"Total keys: {self._total_keys}, clicks: {self._total_clicks}, scrolls: {self._total_scrolls}")
 
         # End current session and get the data
         session_data = None

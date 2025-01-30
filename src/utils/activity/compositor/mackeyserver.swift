@@ -302,15 +302,25 @@ func myCGEventTapCallback(
     if [.keyDown, .keyUp].contains(type) {
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let flags = getModifierFlags(event: event)
-        
-        _ = haltPropogation(
-            isMouse: false,
-            isDown: type == .keyDown,
-            keyCode: keyCode,
-            location: (event.location.x, event.location.y),
-            flags: flags
-        )
 
+        // Get the character string from the NSEvent
+        if let nsEvent = NSEvent(cgEvent: event) {
+            // Handle special keys
+            if let specialKey = nsEvent.specialKey {
+                // Send special key name instead of character
+                curId = curId + 1
+                print("SPECIAL_KEY,\(type == .keyDown ? "DOWN" : "UP"),\(specialKey),\(event.location.x),\(event.location.y),\(curId),\(flags)")
+                fflush(stdout)
+            } else if let characters = nsEvent.characters {
+                for character in characters {
+                    let characterString = String(character)
+                    curId = curId + 1
+                    print("CHARACTER,\(type == .keyDown ? "DOWN" : "UP"),\(characterString),\(event.location.x),\(event.location.y),\(curId),\(flags)")
+                    fflush(stdout)
+                }
+            }
+        }
+        
     } else if [.flagsChanged].contains(type) {
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let downState = getModifierDownState(event: event, keyCode: keyCode)

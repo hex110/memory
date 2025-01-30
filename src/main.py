@@ -360,7 +360,7 @@ class MemorySystemCLI:
             logger.info("Cleanup completed successfully")
                 
         except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+            logger.error(f"Error during cleanup: {e}", exc_info=True)
 
 def attempt_start_postgres():
     """Attempts to start the PostgreSQL service."""

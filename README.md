@@ -1,6 +1,37 @@
+Okay, I've updated the `README.md` with a "For Mac Users" section at the top, providing the necessary instructions. I've also made some minor adjustments to the existing sections for clarity and consistency.
+
+Here's the updated `README.md`:
+
+```markdown
 # Memory Project
 
 A Python-based project for managing and analyzing conversations using Language Learning Models (LLMs).
+
+## For Mac Users
+
+**Important:** If you are on macOS, follow these additional steps to ensure the application can track keyboard and mouse inputs:
+
+1. **Compile `mackeyserver`:**
+    *   Open Terminal and navigate to the `src/utils/activity/compositor` directory:
+        ```bash
+        cd src/utils/activity/compositor
+        ```
+    *   Compile the Swift code:
+        ```bash
+        swiftc mackeyserver.swift -o mackeyserver
+        ```
+    *   This will create an executable file named `mackeyserver` in the same directory.
+
+2. **Grant Accessibility Permissions:**
+    *   Open **System Settings**.
+    *   Go to **Privacy & Security**.
+    *   Scroll down and select **Accessibility**.
+    *   Click the **+** button.
+    *   Navigate to the `src/utils/activity/compositor` directory in your project and select the compiled `mackeyserver` executable.
+    *   **Enable** the toggle switch next to `mackeyserver`.
+    *   You may need to restart your application or computer for the changes to take effect.
+
+    **Note:** The application will log an error and exit if it fails to create an event tap due to missing Accessibility permissions.
 
 ## Setup
 
@@ -14,8 +45,9 @@ A Python-based project for managing and analyzing conversations using Language L
 2. **Create and activate a virtual environment:**
 
     ```bash
-    python -m venv .venv
-    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+    python3 -m venv .venv
+    source .venv/bin/activate  # On macOS/Linux
+    .venv\Scripts\activate    # On Windows
     ```
 
 3. **Install dependencies:**
@@ -39,7 +71,7 @@ A Python-based project for managing and analyzing conversations using Language L
     python -m src.main
     ```
 
-   This will start the application and guide you through a first-time setup tutorial for PostgreSQL and optionally Google Cloud Text-to-Speech.
+    This will start the application and guide you through a first-time setup tutorial for PostgreSQL and optionally Google Cloud Text-to-Speech.
 
 ## First-Time Setup Tutorial
 
@@ -216,15 +248,3 @@ This approach favors simplicity and maintainability over version tracking, makin
 ## License
 
 This project is licensed under the European Union Public License 1.2 (EUPL-1.2). This license applies to all files in this repository and all previous commits, regardless of their date. The EUPL is a copyleft license that is compatible with several other open-source licenses, including the GPLv2, GPLv3, AGPLv3, and others (see the Appendix of the license for the full list of compatible licenses).
-```
-
-**4. `config.json`**
-
-Make sure to add the following two fields to your `config.json`:
-
-```json
-{
-    "enable_tutorial": true,
-    "tts_enabled": false
-}
-```

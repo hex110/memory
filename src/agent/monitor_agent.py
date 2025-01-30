@@ -118,6 +118,8 @@ class MonitorAgent(BaseAgent):
                 # Get data from activity manager
                 activity_data = await self.activity_manager.input_tracker.get_events()
 
+                # self.logger.debug(f"Activity data: {activity_data}")
+
                 # Capture screenshot
                 screen_data = await self.activity_manager.capture_screenshot()
                 if screen_data:
@@ -132,7 +134,7 @@ class MonitorAgent(BaseAgent):
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                self.logger.error(f"Error in monitoring loop: {e}")
+                self.logger.error(f"Error in monitoring loop: {e}", exc_info=True)
                 await asyncio.sleep(1)
         # finally:
             # self.logger.debug("Monitoring loop ended")
