@@ -7,6 +7,7 @@ import uuid
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 
+from src.agent.base_agent import ToolBehavior
 from src.interfaces.postgresql import DatabaseInterface
 from src.ontology.manager import OntologyManager
 from src.utils.events import ActivityEventType, ActivityEvent, EventSystem
@@ -39,7 +40,7 @@ class AnalysisAgent(BaseAgent):
 
         try:
             # Set available tools for this agent
-            self.available_tools = []
+            # self.available_tools = ["interaction.text_to_speech"]
 
             self.session_id = session_id
             self.event_system = EventSystem()
@@ -238,7 +239,7 @@ class AnalysisAgent(BaseAgent):
         self, 
         end_time: datetime, 
         limit: Optional[int] = None,
-        analysis_type: Optional[str] = None
+        analysis_type: Optional[str] = "regular"
     ) -> List[Dict[str, Any]]:
         """Get recent analyses for a time period."""
         query = {
@@ -248,16 +249,17 @@ class AnalysisAgent(BaseAgent):
             }
         }
         
-        if analysis_type:
-            query["analysis_type"] = analysis_type
-            
-        return await self.db.query_entities(
+        query["analysis_type"] = analysis_type
+
+        logs = await self.db.query_entities(
             "activity_analysis",
             query,
             sort_by="start_timestamp",
             sort_order="desc",
             limit=limit
         )
+        logs = logs[::-1]
+        return logs
 
     def _format_window_summaries(self, window_sessions: List[Dict[str, Any]]) -> str:
         """Format window summaries for analysis."""
@@ -344,6 +346,8 @@ class AnalysisAgent(BaseAgent):
                 "created_by": "agent"
             }
 
+            self.logger.debug(f"Storing analysis. Time: {analysis_data['start_time']}. Type: {analysis_type}. Response:\n{analysis_data['analysis']}\n")
+
             try:
                 await self.db.add_entity(
                     "activity_analysis",
@@ -381,7 +385,8 @@ class AnalysisAgent(BaseAgent):
         # Get recent analyses
         recent_logs = await self._get_recent_analyses(
             end_time=start_time,
-            limit=3
+            limit=3,
+            analysis_type="regular"
         )
 
         # Format data for LLM
@@ -414,7 +419,7 @@ class AnalysisAgent(BaseAgent):
             "total_keys": total_keys,
             "total_clicks": total_clicks,
             "total_scrolls": total_scrolls,
-            "duration": self.collection_interval,
+            "duration": int(self.collection_interval),
             "previous_logs": [log["llm_response"] for log in recent_logs] if recent_logs else None,
             "screenshot_available": screenshot_available
         }
@@ -422,12 +427,16 @@ class AnalysisAgent(BaseAgent):
         # Get LLM analysis
         system_prompt = self.load_prompt("analysis_system_30sec", context)
         analysis_prompt = self.load_prompt("analysis_30sec", context)
+
+        # self.logger.debug(f"SYSTEM PROMPT:\n{system_prompt}\n")
+        # self.logger.debug(f"ANALYSIS PROMPT:\n{analysis_prompt}\n")
         
         llm_response = await self.call_llm(
             prompt=analysis_prompt,
             system_prompt=system_prompt,
             temperature=0.7,
-            images=images if images else None
+            images=images if images else None,
+            tool_behavior=ToolBehavior.USE_AND_DONE
         )
         
         return {
@@ -459,7 +468,14 @@ class AnalysisAgent(BaseAgent):
 
         recent_logs = await self._get_recent_analyses(
             end_time=start_time,
-            limit=10
+            limit=self.repeat_interval,
+            analysis_type="regular"
+        )
+
+        latest_special_log = await self._get_recent_analyses(
+            end_time=start_time,
+            limit=1,
+            analysis_type="special"
         )
         
         # Prepare context with both raw data and recent analyses
@@ -472,7 +488,9 @@ class AnalysisAgent(BaseAgent):
             "total_clicks": sum(r["total_clicks"] for r in raw_data),
             "total_scrolls": sum(r["total_scrolls"] for r in raw_data),
             "recent_analyses": [log["llm_response"] for log in recent_logs] if recent_logs else None,
-            "duration": self.collection_interval * self.repeat_interval
+            "latest_special_log": latest_special_log[0]["llm_response"] if latest_special_log else None,
+            "full_duration": int(self.collection_interval * self.repeat_interval),
+            "duration": int(self.collection_interval)
         }
         
         # Get LLM analysis
@@ -520,9 +538,11 @@ class AnalysisAgent(BaseAgent):
             sort_by="start_timestamp",
             sort_order="asc"
         )
+
+        duration = str(self.collection_interval * self.repeat_interval) + " minutes"
         
         all_analyses = special_analyses
-        if len(special_analyses) < self.repeat_interval:
+        if len(special_analyses) < self.repeat_interval / 2:
             regular_query = {"session_id": session_id}
             all_analyses = await self.db.query_entities(
                 "activity_analysis",
@@ -530,6 +550,7 @@ class AnalysisAgent(BaseAgent):
                 sort_by="start_timestamp",
                 sort_order="asc"
             )
+            duration = str(self.collection_interval) + " seconds"
         
         # Get raw data for timing information
         raw_query = {"session_id": session_id}
@@ -548,13 +569,13 @@ class AnalysisAgent(BaseAgent):
         
         start_time = start_dt.timestamp()
         end_time = end_dt.timestamp()
-        duration = end_time - start_time
+        session_duration = end_time - start_time
 
         context = {
-            "session_id": session_id,
+            "session_duration": session_duration,
             "duration": duration,
-            "start_time": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
-            "end_time": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+            # "start_time": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+            # "end_time": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
             "analyses": [a["llm_response"] for a in all_analyses],
             "custom_prompt": custom_prompt
         }

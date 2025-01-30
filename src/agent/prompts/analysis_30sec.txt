@@ -1,31 +1,42 @@
-Describe what's happening in this moment of the user's work session:
+Observation for this **{{duration}}**-second activity snapshot:
 
-CURRENT ACTIVITY:
-Timestamp: {{timestamp}}
-Duration: {{duration}} seconds
+In the last **{{duration}}** seconds, here's what the user did on their computer:
+
 Window Activity:
 {{window_summaries}}
 
-Note: Some windows may be marked as "privacy filtered" - this indicates activity was tracked but specific interactions were hidden for privacy.
+Note: Some window activity might be marked as "privacy filtered," meaning specific interactions were hidden for privacy.
 
-Interaction Metrics:
-- Keys: {{total_keys}}
-- Clicks: {{total_clicks}}
-- Scrolls: {{total_scrolls}}
+{% if total_keys > 0 or total_clicks > 0 or total_scrolls > 0 %}
+Interaction Summary: Over this **{{duration}}**-second period, the user performed the following interactions:
+    {% if total_keys > 0 %} - Typed a total of {{total_keys}} keys.{% endif %}
+    {% if total_clicks > 0 %} - Clicked {{total_clicks}} times.{% endif %}
+    {% if total_scrolls > 0 %} - Scrolled {{total_scrolls}} times.{% endif %}
+{% else %}
+No keyboard, mouse, or scroll interactions were detected in this period.
+{% endif %}
+
 
 {% if screenshot_available %}
-A screenshot of the user's current monitors is available to you for more context about what they are doing.
+A screenshot of the user's monitors is available to {% if screenshot_available %}provide visual context for this activity.{% else %}visual context if available.{% endif %}
 {% endif %}
 
 {% if previous_logs %}
-These are the most recent analyses done. They will help you notice how the user's activities are shifting through time. Try to reference them meaningfully, not just out of necessity:
-{{previous_logs}}
+RECENT OBSERVATIONS:
+To understand the flow of the user's work, here are the most recent observations from previous **{{duration}}**-second intervals:
+------
+{% for log in previous_logs %}
+{{log}}
+------
+{% endfor %}
 {% endif %}
 
-Provide a 1-2 sentence observation that captures what the user is actually working on, not just which windows are open. Consider:
-- What task or goal they appear to be pursuing
-- How this moment connects to their recent activity
-- Any meaningful changes in their work
-- Visual context from the screenshot if available
+Based on this **{{duration}}**-second activity snapshot, provide a concise (1-2 sentence) observation that captures the *essence* of what the user was doing. Focus on:
 
-Focus on building understanding of their work session, not just rephrasing window data.
+- **Semantic Interpretation:** Understand the *meaning* of the window activity and interactions, not just listing them.
+- **Likely Task Inference:**  Infer the *likely* task or activity the user was engaged in during this moment.
+{% if previous_logs %}
+- **Contextual Awareness:** Consider the recent work pattern ("RECENT OBSERVATIONS") and {% if screenshot_available %}visual context from the screenshot.{% else %}visual context if available.{% endif %}
+{% endif %}
+
+Aim for a natural and insightful observation that builds a continuous understanding of the user's work session.

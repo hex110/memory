@@ -1,24 +1,32 @@
-Analyze the last 5 minutes of user activity:
+Analyze the user's activity over the last **{{full_duration / 60}}** minutes period and provide a concise summary and analysis.
 
-ACTIVITY SUMMARY:
-Duration: {{duration}}
-Window Activity Summary:
-{{window_summaries}}
+**{{duration}}-Second Observations:**
+Here is a **numbered list of detailed observations** from the base-layer agent for each **{{duration}}-second interval** within this **{{full_duration / 60}}-minute period**:
+{% if recent_analyses %}
+{% for analysis in recent_analyses %}
+{{ loop.index }}. {{ analysis }}
+{% endfor %}
+{% else %}
+No **{{duration}}-second observations** available for this period.
+{% endif %}
 
-Note: Some windows may be marked as "privacy filtered" - this indicates activity was tracked but specific interactions were hidden for privacy.
+Here are the **aggregated activity metrics for this {{full_duration / 60}}-minute period**:
+- Total Keys Pressed: {{total_keys}}
+- Total Mouse Clicks: {{total_clicks}}
+- Total Scroll Events: {{total_scrolls}}
 
-Aggregate Metrics:
-- Total Keys: {{total_keys}}
-- Total Clicks: {{total_clicks}}
-- Total Scrolls: {{total_scrolls}}
+{% if latest_special_log %}
+**Previous {{full_duration / 60}}-Minute Analysis:**
+To understand the evolution of the user's work patterns, here is the analysis from the *immediately preceding* **{{full_duration / 60}}-minute period**:
+------
+{{ latest_special_log }}
+------
+{% endif %}
 
-Recent 30-second Analyses:
-{{recent_analyses}}
+Based on this data, provide a **3-5 sentence summary and analysis** that addresses the following:
 
-Provide a 2-3 sentence summary that captures:
-- The main tasks or objectives pursued during this period
-- Any significant patterns or changes in work focus
-- How the user's activity evolved over these 5 minutes
-- Signs of task completion, progress, or workflow challenges
+1. **Work Blocks and Task Transitions:** Describe the main **work blocks or primary activities** observed during this **{{full_duration / 60}}-minute period**. Identify any significant **task transitions or context shifts**.
+2. **Focus Quality and Workflow Patterns:** Analyze the user's **focus quality and dominant workflow patterns**. Was their focus **sustained and deep, or fragmented and shallow**? Were there any notable patterns in their **tool usage or work style**?
+3. **Progress and Challenges:** Summarize any signs of **progress towards likely tasks or goals**. Identify any **workflow obstacles, interruptions, or potential inefficiencies** observed.
 
-Focus on identifying broader patterns and connecting individual moments into a coherent narrative of work progress.
+Aim to provide an insightful and concise overview of the user's work patterns and developments during this **{{full_duration / 60}}-minute mini-session**.

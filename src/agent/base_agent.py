@@ -140,6 +140,7 @@ class BaseAgent(AgentInterface):
     async def call_llm(
         self,
         prompt: Union[str, List[Dict[str, Any]]],
+        model: str = None,
         temperature: float = 0.7,
         system_prompt: Optional[str] = None,
         tool_behavior: ToolBehavior = ToolBehavior.USE_AND_ANALYZE_OUTPUT_AND_DONE,
@@ -153,6 +154,12 @@ class BaseAgent(AgentInterface):
         **kwargs
     ) -> Union[str, AsyncIterable[str]]:
         try:
+            self.logger.debug(f"Prompt:\n{prompt}\n")
+            self.logger.debug(f"System prompt:\n{system_prompt}\n")
+
+            if model is None:
+                model = self.model
+            
             contents = []
         
             # Add message history if provided
@@ -200,6 +207,7 @@ class BaseAgent(AgentInterface):
             if specific_tools or self.available_tools:
                 from src.schemas.tools_definitions import get_tool_declarations
                 tools = get_tool_declarations(specific_tools or self.available_tools)
+            # self.logger.debug(f"Tools: {tools}")
             
             # Remove tool-related kwargs
             config_kwargs = {k: v for k, v in kwargs.items() 
@@ -215,7 +223,7 @@ class BaseAgent(AgentInterface):
 
                 # Create the base stream
                 base_stream = self.client.models.generate_content_stream(
-                    model=self.model,
+                    model=model,
                     contents=contents,
                     config=types.GenerateContentConfig(
                         temperature=temperature,
@@ -280,7 +288,7 @@ class BaseAgent(AgentInterface):
             
             else:
                 response = await self.client.models.generate_content(
-                    model=self.model,
+                    model=model,
                     contents=contents,
                     config=types.GenerateContentConfig(
                         temperature=temperature,
@@ -289,24 +297,34 @@ class BaseAgent(AgentInterface):
                     )
                 )
 
-                # self.logger.debug(f"Response: {response.text}")
+                # self.logger.debug(f"Response: {response}")
                 
-                # Check if there's a function call and if it has the required attributes
-                if (hasattr(response.candidates[0].content.parts[0], 'function_call') and 
-                    response.candidates[0].content.parts[0].function_call is not None and
-                    hasattr(response.candidates[0].content.parts[0].function_call, 'name')):
-                    return await self._handle_tool_calls(
+                function_calls = []
+                text_response = ""
+                for part in response.candidates[0].content.parts:
+                    if hasattr(part, 'function_call') and part.function_call is not None:
+                        function_calls.append(part.function_call)
+                    elif hasattr(part, 'text') and part.text is not None:
+                        text_response += part.text
+
+                # Handle function calls if any were found
+                if function_calls:
+                    await self._handle_tool_calls(
                         message=response.candidates[0].content,
                         messages=messages,
                         tool_behavior=tool_behavior,
                         kwargs=kwargs
                     )
-                
-                return response.text
+                    # self.logger.debug(f"RETURNING: {text_response}")
+                    return text_response
+
+                # Return the text response if no function calls were made
+                return text_response
             
         except Exception as e:
             raise APIResponseError(f"Error calling LLM: {str(e)}") from e
     
+
     async def _handle_tool_calls(
         self,
         message: Any,
@@ -316,19 +334,35 @@ class BaseAgent(AgentInterface):
     ) -> str:
         self._ensure_tools_loaded()
         
-        # Extract the function call details
-        function_call = message.parts[0].function_call
-        
-        # Add assistant message with function call to message history
-        messages.append({
-            "role": "assistant",
-            "content": message.parts[0].text if hasattr(message.parts[0], 'text') else None,
-            "function_call": {
-                "name": function_call.name,
-                "arguments": function_call.args
-            }
-        })
+        # Iterate through all parts to find function calls
+        function_calls = [
+            part.function_call
+            for part in message.parts
+            if hasattr(part, "function_call") and part.function_call is not None
+        ]
 
+        for function_call in function_calls:
+            if function_call is None:
+                self.logger.warning("Encountered a None function_call unexpectedly.")
+                continue
+        
+            # Add assistant message with function call to message history
+            messages.append({
+                "role": "assistant",
+                "content": "",
+                "function_call": {
+                    "name": function_call.name,
+                    "arguments": function_call.args
+                }
+            })
+            # Update the content with text from all text parts
+            for part in message.parts:
+                if hasattr(part, "text") and part.text:
+                    messages[-1]["content"] += part.text
+
+        # self.logger.debug(f"Messages: {messages}")
+        # self.logger.debug(f"Function call: {function_call}")
+        # self.logger.debug(f"Tool behavior: {tool_behavior}")
         try:
             # Get and call the tool implementation
             # self.logger.debug(f"Calling tool: {function_call.name}")
@@ -353,9 +387,13 @@ class BaseAgent(AgentInterface):
                 serializable_response = function_response
                 binary_data = {}
             
+            # self.logger.debug(f"Tool behavior: {tool_behavior}")
+            # self.logger.debug(ToolBehavior.USE_AND_DONE)
             if tool_behavior == ToolBehavior.USE_AND_DONE:
+                # self.logger.debug(f"RETURNING: {serializable_response}")
                 return serializable_response
-
+            
+            # self.logger.debug(f"Continuing...")
             # Add tool response to message history
             messages.append({"role": "tool", "content": serializable_response})
 

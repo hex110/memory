@@ -78,12 +78,14 @@ class TTSEngine:
         if not self.tts_enabled:
             logger.info("TTS is disabled. Skipping playback.")
             return
+        
+        # logger.debug(f"Playing text: {text}")
             
         try:
             audio_data = await self._synthesize_speech(text)
             if audio_data:
-                async with self.audio_semaphore:
-                    await self.audio_player.play_audio(audio_data)
+                await self.audio_player.queue_audio(audio_data)
+                await self.audio_player.playback_queue.join()
         except Exception as e:
             logger.error("Failed to play text", extra={"error": str(e)})
 

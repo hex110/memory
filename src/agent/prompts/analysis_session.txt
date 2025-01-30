@@ -1,24 +1,42 @@
-Analyze this complete work session:
+SESSION ANALYSIS: Review and Provide Actionable Insights for Workflow Improvement
 
-SESSION DETAILS:
-Start Time: {{start_time}}
-End Time: {{end_time}}
-Duration: {{duration}}
+Analyze this completed work session and provide **concrete, actionable recommendations** to improve the user's workflow in future sessions.
 
-Previous Analyses:
+Session Duration: **{{session_duration}}**
+
+{{duration}} Mini-Session Analyses:
+Here are the analyses from the {{duration}} mini-sessions throughout this work session:
 {% for analysis in analyses %}
-- {{analysis}}
+{{ loop.index }}. {{ analysis }}
 {% endfor %}
 
-{% if custom_prompt %}
-{{custom_prompt}}
-{% else %}
-Provide a comprehensive summary of this work session that includes:
-1. Main tasks and objectives pursued
-2. Key accomplishments or progress made
-3. Notable work patterns and habits observed
-4. Significant transitions or changes in focus
-5. Overall work rhythm and productivity patterns
 
-End with specific insights about the user's work style and any patterns that could inform workflow optimization.
+{% if custom_prompt %}
+**CUSTOM ANALYSIS REQUEST:**
+The user has provided a custom analysis request. Please focus primarily on addressing this request, using the session data as context:
+------
+{{ custom_prompt }}
+------
+
+After addressing the custom request, *if relevant and concise*, you may also briefly include 1-2 key actionable insights for general workflow improvement from the session.
+
+{% else %}
+**SESSION ANALYSIS REQUEST:**
+Please provide a standard post-session analysis focused on actionable workflow improvements.
+
+Based on the session data, address the following key areas to generate actionable insights:
+
+1. **Identify "What Worked Well" in this Session (Patterns to Maintain):**
+    - Highlight specific work patterns, strategies, or moments in the session that were particularly effective or productive.
+    - What can the user *repeat* or *reinforce* in future sessions?
+
+2. **Identify "What Could Be Improved" (Challenges to Address):**
+    - Point out specific challenges, inefficiencies, distractions, or less effective work patterns observed during the session.
+    - What are the key areas the user should *focus on improving* in future sessions?
+
+3. **Provide "Specific Recommendations for the Next Session" (Actionable Next Steps):**
+    - Based on your analysis of "What Worked Well" and "What Could Be Improved," provide concrete, actionable recommendations for the *very next work session*.
+    - These should be clear, practical steps the user can *immediately implement* to optimize their workflow.
+
+Structure your output clearly under these three headings: "What Worked Well," "What Could Be Improved," and "Specific Recommendations for the Next Session." Aim for concise and directly actionable insights under each heading.
 {% endif %}
