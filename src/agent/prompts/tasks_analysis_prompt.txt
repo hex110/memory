@@ -1,0 +1,54 @@
+Context: User Activity Analysis for Task Management
+
+**Medium-Term Activity Analysis Summary:**
+{{ medium_term_analysis }}
+
+**Recent Short-Term Activity Observations:**
+{% if short_term_analyses %}
+Here are observations from the last few short intervals:
+{% for analysis in short_term_analyses %}
+- {{ analysis }}
+{% endfor %}
+{% else %}
+No recent short-term activity observations available.
+{% endif %}
+
+**Current Tasks:**
+Here are the current lists of tasks:
+
+**To-Do Tasks:**
+{% if to_do_tasks %}
+{{ to_do_tasks }}
+{% else %}
+No tasks currently in "To Do" status.
+{% endif %}
+
+**Doing Tasks:**
+{% if doing_tasks %}
+{{ doing_tasks }}
+{% else %}
+No tasks currently in "Doing" status.
+{% endif %}
+
+---
+
+**Task Management Instructions:**
+
+Based on the user's recent activity analysis and the current task lists, **directly manage tasks using the provided tools**. You should use **multiple** tools at the same time if you think that's needed.
+
+NOTE: WE ARE IN TEST MODE. PLEASE USE THE add_task TOOL ONCE, AND AFTER THAT, CALL IT AGAIN FOR ANOTHER TASK, TO TEST IF IT WORKS FOR YOU TO CALL A SINGLE TOOL TWICE IN A ROW. BE SURE TO CALL THE TOOL CORRECTLY EACH TIME. DON'T PRINT YOUR TOOL CALL INSIDE THE TEXT YOU RETURN THE USER, BUT USE IT AS A FUNCTION.
+
+Consider the following task management actions:
+
+1. **New Task Identification:**
+    - If the user's recent activity suggests any new tasks that are not currently in the "To Do" list, **use the `add_task` tool to add 1-2 relevant tasks**.
+
+2. **Task Completion:**
+    - If the user's activity indicates progress on or completion of any tasks currently in the "Doing" list, **use the `complete_task` tool to mark 1-2 completed tasks**. Provide the `task_id` for each task to complete.
+
+3. **Task Starting/Focus Shift:**
+    - If the user's recent activity indicates a clear shift in focus or a start of work on a new task, and if there's a relevant task in the "To Do" list, **use the `start_task` tool to move 1 task from "To Do" to "Doing"**. Provide the `task_id` to start.
+
+**Focus on taking action directly using the tools based on your analysis. If no task management actions are clearly indicated, then do not use any tools.**
+
+Provide a brief (1-2 sentence) summary of the task management actions you have taken, or state that no actions were taken if that is the case.

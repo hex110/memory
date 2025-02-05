@@ -1,4 +1,5 @@
 """Main entry point for the memory system."""
+from datetime import datetime
 import os
 import asyncio
 import logging
@@ -15,6 +16,7 @@ import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic") # getting pydantic warning for a google-genai file, and I don't want to modify the library file, so suppressing it for now
 
+from src.agent.tasks_agent import TasksAgent
 from src.utils.config import load_config_and_logging
 from src.database.postgresql import PostgreSQLDatabase
 from src.utils.logging import get_logger, configure_logging
@@ -116,6 +118,17 @@ class MemorySystemCLI:
             tts_engine=cli.tts_engine,
             activity_manager=cli.activity_manager,
         )
+
+        cli.tasks_agent = TasksAgent(
+            config=config,
+            prompt_folder=os.path.join(os.path.dirname(__file__), "agent", "prompts"),
+            db=db,
+            ontology_manager=ontology_manager,
+            tts_engine=cli.tts_engine,
+            session_id=cli.monitor_agent.session_id
+        )
+
+        await cli.tasks_agent.start()
 
         await cli.assistant_agent.start()
 
@@ -229,6 +242,25 @@ class MemorySystemCLI:
         except Exception as e:
             logger.error("Analysis failed", {"error": str(e)})
 
+    async def _test_tasks(self):
+        """Broadcast a test ANALYSIS_MEDIUM_TERM_AVAILABLE event."""
+        try:
+            if self.analysis_agent and self.analysis_agent.event_system:
+                from src.utils.events import ActivityEvent, ActivityEventType  # Import here to avoid circular dependency
+                event = ActivityEvent(
+                    session_id=self.monitor_agent.session_id,
+                    timestamp=datetime.now(),
+                    data={"test": "event"},
+                    event_type=ActivityEventType.ANALYSIS_MEDIUM_TERM_AVAILABLE
+                )
+                await self.analysis_agent.event_system.broadcaster.broadcast_activity(event)
+                logger.info("Test ANALYSIS_MEDIUM_TERM_AVAILABLE event broadcasted.")
+            else:
+                logger.error("Analysis agent or event system not initialized.")
+        except Exception as e:
+            logger.error("Error in _test_tasks", {"error": str(e)}, exc_info=True)
+            raise
+
     def get_choices(self) -> List[str]:
         """Dynamically generate choices based on current state."""
         choices = []
@@ -245,6 +277,7 @@ class MemorySystemCLI:
         choices.extend([
             "Analyze Session",
             "Open Observation Log",
+            "Test Tasks",
             "Exit"
         ])
         return choices
@@ -265,6 +298,8 @@ class MemorySystemCLI:
                 message = "Analyzing session..."
             elif choice == "Open Observation Log":
                 message = "Opening observation log..."
+            elif choice == "Test Tasks":
+                message = "Testing tasks..."
             
             if message:
                 print(f"{message}")
@@ -281,6 +316,8 @@ class MemorySystemCLI:
                 await self._analyze_session()
             elif choice == "Open Observation Log":
                 self.open_file(Path("responses/responses.txt"))
+            elif choice == "Test Tasks":
+                await self._test_tasks()
                 
             # Add a newline after operation completes
             if message:

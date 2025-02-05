@@ -1,3 +1,4 @@
+# tools.py
 """Tool definitions and schemas for the system."""
 
 from dataclasses import dataclass
@@ -82,7 +83,7 @@ TOOL_REGISTRY = {
             "order matters. The response will be a list of matching entities."
         )
     ),
-    
+
     "database.add_entity": ToolDefinition(
         name="add_entity",
         description="Create a new entity in the database",
@@ -103,7 +104,7 @@ TOOL_REGISTRY = {
             "Ensure data matches the entity type's schema requirements."
         )
     ),
-    
+
     "database.update_entity": ToolDefinition(
         name="update_entity",
         description="Update an existing entity in the database",
@@ -137,13 +138,13 @@ TOOL_REGISTRY = {
                 "type": "STRING",
                 "description": "The action to perform",
                 "enum": [
-                    "play", "pause", "next", "previous", "like", 
+                    "play", "pause", "next", "previous", "like",
                     "unlike", "like_current", "unlike_current",
                     "play_saved_tracks", "get_playlists", "play_playlist"
                 ]
             },
             "track_id": {
-                "type": "STRING", 
+                "type": "STRING",
                 "description": "The Spotify ID of the track (required for 'like' and 'unlike')"
             },
             "playlist_id": {
@@ -263,7 +264,61 @@ TOOL_REGISTRY = {
             "Use get_recent_inputs to understand the user's recent keyboard and mouse activity. "
             "This provides details about which windows were active and what kind of interaction occurred."
         )
-    )
+    ),
+
+    # Task Management Tools
+    "tasks.add_task": ToolDefinition(
+        name="add_task",
+        description="Add a new task to the task list",
+        parameters={
+            "project": {
+                "type": "STRING",
+                "description": "Project associated with the task"
+            },
+            "title": {
+                "type": "STRING",
+                "description": "Title of the task"
+            }
+        },
+        required_params=["title", "project"],
+        category="tasks",
+        implementation="tasks.add_task",
+        implementation_type="method",
+        class_name="TaskManager",
+        prompt_hint="Use add_task to create a new task. Provide a title and project name."
+    ),
+    "tasks.complete_task": ToolDefinition(
+        name="complete_task",
+        description="Mark a task as completed",
+        parameters={
+            "task_id": {
+                "type": "STRING",
+                "description": "UUID of the task to complete"
+            }
+        },
+        required_params=["task_id"],
+        category="tasks",
+        implementation="tasks.complete_task",
+        implementation_type="method",
+        class_name="TaskManager",
+        prompt_hint="Use complete_task to mark a task as completed. Provide the `task_id`."
+    ),
+    "tasks.start_task": ToolDefinition(
+        name="start_task",
+        description="Mark a task as started",
+        parameters={
+            "task_id": {
+                "type": "STRING",
+                "description": "UUID of the task to start"
+            }
+        },
+        required_params=["task_id"],
+        category="tasks",
+        implementation="tasks.start_task",
+        implementation_type="method",
+        class_name="TaskManager",
+        prompt_hint="Use start_task to mark a task as started. Provide the `task_id`."
+    ),
 }
 
 def get_tool_declarations(tool_names: List[str]) -> List[types.Tool]:
@@ -279,7 +334,7 @@ def get_tool_declarations(tool_names: List[str]) -> List[types.Tool]:
                 }
                 if "properties" in params:
                     schema_params[name]["properties"] = params["properties"]
-                    
+
             function = types.FunctionDeclaration(
                 name=tool.name,
                 description=tool.description,

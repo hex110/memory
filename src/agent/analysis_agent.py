@@ -195,11 +195,23 @@ class AnalysisAgent(BaseAgent):
                 end_time = datetime.now()
                 start_time = end_time - timedelta(seconds=(self.collection_interval * self.repeat_interval))
                 raw_data = await self._get_recent_raw_data(start_time, end_time)
-                
+
                 if raw_data:
                     analysis = await self._analyze_medium_term(raw_data)
                     await self._store_analysis(analysis, "special")
-                
+
+                    # Broadcast ANALYSIS_MEDIUM_TERM_AVAILABLE event here
+                    if analysis: # Only broadcast if analysis was successful
+                        medium_term_event = ActivityEvent(
+                            session_id=self.session_id,
+                            timestamp=analysis["start_time"], # Or event.timestamp if you prefer the event's timestamp
+                            data=analysis, # You can pass the analysis data as event data
+                            event_type=ActivityEventType.ANALYSIS_MEDIUM_TERM_AVAILABLE
+                        )
+                        await self.event_system.broadcaster.broadcast_activity(medium_term_event)
+                        self.logger.debug("Medium term analysis event broadcasted")
+
+
                 self.completed_analyses = 0
 
         except Exception as e:

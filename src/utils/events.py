@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 class ActivityEventType(Enum):
     ACTIVITY_STORED = "activity_stored"
     ANALYSIS_STORED = "analysis_stored"
+    ANALYSIS_MEDIUM_TERM_AVAILABLE = "analysis_medium_term_available"
 
 class HotkeyEventType(Enum):
     HOTKEY_SPEAK = "speak"
@@ -66,7 +67,7 @@ class EventBroadcaster:
         try:
             await callback(event)
         except Exception as e:
-            print(f"Error in event callback: {str(e)}")
+            logger.error(f"Error in event callback: {str(e)}", exc_info=True)
             
     async def cleanup(self):
         """Wait for all pending tasks to complete."""

@@ -117,7 +117,7 @@ class BaseAgent(AgentInterface):
                     module = __import__(module_path, fromlist=[tool_def.class_name])
                     class_ = getattr(module, tool_def.class_name)
                     # Initialize with db only for database tools
-                    if tool_def.category == "database":
+                    if tool_def.category == "database" or tool_def.category == "tasks":
                         class_instances[module_path] = class_(self.db)
                     elif tool_def.category == "context":
                         class_instances[module_path] = class_(
@@ -155,7 +155,7 @@ class BaseAgent(AgentInterface):
     ) -> Union[str, AsyncIterable[str]]:
         try:
             self.logger.debug(f"Prompt:\n{prompt}\n")
-            self.logger.debug(f"System prompt:\n{system_prompt}\n")
+            # self.logger.debug(f"System prompt:\n{system_prompt}\n")
 
             if model is None:
                 model = self.model
@@ -213,6 +213,12 @@ class BaseAgent(AgentInterface):
             config_kwargs = {k: v for k, v in kwargs.items() 
                            if k not in ['tools', 'tool_config', 'function_call']}
 
+            config=types.GenerateContentConfig(
+                temperature=temperature,
+                tools=tools,
+                **config_kwargs
+            )
+
             # self.logger.debug("Calling LLM")
 
             # Always use streaming if TTS is enabled
@@ -225,11 +231,7 @@ class BaseAgent(AgentInterface):
                 base_stream = self.client.models.generate_content_stream(
                     model=model,
                     contents=contents,
-                    config=types.GenerateContentConfig(
-                        temperature=temperature,
-                        tools=tools,
-                        **config_kwargs
-                    )
+                    config=config
                 )
 
                 async def process_stream():
@@ -240,10 +242,12 @@ class BaseAgent(AgentInterface):
                             chunk.candidates[0].content.parts[0].function_call is not None and
                             hasattr(chunk.candidates[0].content.parts[0].function_call, 'name')):
                             # If we get a function call in streaming mode, fall back to non-streaming
+
+                            contents.append(chunk.candidates[0].content)
                             response = await self._handle_tool_calls(
-                                message=chunk.candidates[0].content,
-                                messages=messages,
+                                contents=contents,
                                 tool_behavior=tool_behavior,
+                                config=config,
                                 kwargs=kwargs
                             )
                             yield response
@@ -290,29 +294,19 @@ class BaseAgent(AgentInterface):
                 response = await self.client.models.generate_content(
                     model=model,
                     contents=contents,
-                    config=types.GenerateContentConfig(
-                        temperature=temperature,
-                        tools=tools,
-                        **config_kwargs
-                    )
+                    config=config
                 )
 
                 # self.logger.debug(f"Response: {response}")
                 
-                function_calls = []
-                text_response = ""
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, 'function_call') and part.function_call is not None:
-                        function_calls.append(part.function_call)
-                    elif hasattr(part, 'text') and part.text is not None:
-                        text_response += part.text
+                text_response = response.candidates[0].content.parts[0].text
 
-                # Handle function calls if any were found
-                if function_calls:
-                    await self._handle_tool_calls(
-                        message=response.candidates[0].content,
-                        messages=messages,
+                if hasattr(response.candidates[0].content.parts[0], 'function_call') and response.candidates[0].content.parts[0].function_call is not None:
+                    contents.append(response.candidates[0].content)
+                    text_response = await self._handle_tool_calls(
+                        contents=contents,
                         tool_behavior=tool_behavior,
+                        config=config,
                         kwargs=kwargs
                     )
                     # self.logger.debug(f"RETURNING: {text_response}")
@@ -327,141 +321,97 @@ class BaseAgent(AgentInterface):
 
     async def _handle_tool_calls(
         self,
-        message: Any,
-        messages: List[Dict[str, Any]],
+        contents: List[types.Content],
         tool_behavior: ToolBehavior,
+        config: types.GenerateContentConfig,
         kwargs: Dict[str, Any]
     ) -> str:
+        """Handles tool calls, executes tools, manages tool behavior, and iterates for KEEP_USING_UNTIL_DONE."""
         self._ensure_tools_loaded()
-        
-        # Iterate through all parts to find function calls
+
+        # Extract function calls from the LAST message in contents (which is the LLM's response)
+        last_message_content = contents[-1]
         function_calls = [
             part.function_call
-            for part in message.parts
+            for part in last_message_content.parts
             if hasattr(part, "function_call") and part.function_call is not None
         ]
 
-        for function_call in function_calls:
-            if function_call is None:
-                self.logger.warning("Encountered a None function_call unexpectedly.")
-                continue
-        
-            # Add assistant message with function call to message history
-            messages.append({
-                "role": "assistant",
-                "content": "",
-                "function_call": {
-                    "name": function_call.name,
-                    "arguments": function_call.args
-                }
-            })
-            # Update the content with text from all text parts
-            for part in message.parts:
-                if hasattr(part, "text") and part.text:
-                    messages[-1]["content"] += part.text
+        self.logger.debug(f"Function calls detected in _handle_tool_calls: {function_calls}")
 
-        # self.logger.debug(f"Messages: {messages}")
-        # self.logger.debug(f"Function call: {function_call}")
-        # self.logger.debug(f"Tool behavior: {tool_behavior}")
-        try:
-            # Get and call the tool implementation
-            # self.logger.debug(f"Calling tool: {function_call.name}")
-            # self.logger.debug(f"Tool registry: {self.tool_registry[function_call.name]}")
+        tool_responses_contents = []
+        for function_call in function_calls:
+            # Execute the tool
             function = self.tool_registry[function_call.name]
             function_response = await function(**function_call.args)
 
+            # Convert function response to appropriate format - wrap in "result"
+            function_response = {"result": function_response}
+
+            serializable_response = {}
+            binary_data = {}
+
             # Convert function response to appropriate format
-            if isinstance(function_response, dict):
-                serializable_response = {}
-                binary_data = {}
-                
-                for key, value in function_response.items():
+            if isinstance(function_response['result'], dict): # Check if result is a dict
+                for key, value in function_response['result'].items(): # Access items through 'result' key now
                     if isinstance(value, bytes):
-                        if 'mime_type' in function_response:
-                            binary_data[key] = (value, function_response['mime_type'])
+                        if 'mime_type' in function_response['result'] and function_response['result']['mime_type']: # Check mime_type in result
+                            binary_data[key] = (value, function_response['result']['mime_type']) # Get mime_type from result
                         else:
                             binary_data[key] = (value, 'application/octet-stream')
                     else:
                         serializable_response[key] = value
-            else:
-                serializable_response = function_response
+                serializable_response['result'] = serializable_response # Re-wrap serializable response
+            else: # If result is not a dict, treat it as a string result
+                serializable_response = {"result": str(function_response['result']) } # Ensure string conversion for non-dict result
                 binary_data = {}
-            
-            # self.logger.debug(f"Tool behavior: {tool_behavior}")
-            # self.logger.debug(ToolBehavior.USE_AND_DONE)
-            if tool_behavior == ToolBehavior.USE_AND_DONE:
-                # self.logger.debug(f"RETURNING: {serializable_response}")
-                return serializable_response
-            
-            # self.logger.debug(f"Continuing...")
-            # Add tool response to message history
-            messages.append({"role": "tool", "content": serializable_response})
 
-            contents = []
-            for m in messages[:-2]:  # Convert previous messages
-                contents.append(types.Content(
-                    role=m["role"],
-                    parts=[types.Part.from_text(m["content"])]
-                ))
-                
-            # Add function call and response in the format expected by Gemini
-            contents.append(message)  # Function call content
-            
-            # Parse the serializable_response if it's a string
-            if isinstance(serializable_response, str):
-                try:
-                    parsed_response = json.loads(serializable_response)
-                except json.JSONDecodeError:
-                    parsed_response = {"result": serializable_response}
-            else:
-                parsed_response = serializable_response
 
             function_response_part = types.Part.from_function_response(
                 name=function_call.name,
-                response=parsed_response
+                response=serializable_response
             )
-            contents.append(types.Content(
-                role="tool", 
-                parts=[function_response_part]
-            ))
-            
-            if tool_behavior == ToolBehavior.USE_AND_ANALYZE_OUTPUT_AND_DONE:
-                # Add binary data to kwargs if present
-                if binary_data:
-                    for key, (data, mime_type) in binary_data.items():
-                        contents[-1].parts.append(types.Part.from_bytes(data=data, mime_type=mime_type))
-                
-                # Remove media from kwargs since they'll be in contents
-                for media_type in ['videos', 'images', 'audios']:
-                    kwargs.pop(media_type, None)
-                
-                response = await self.client.models.generate_content(
-                    model=self.model,
+            tool_response_content = types.Content(role="tool", parts=[function_response_part])
+
+            # Add binary data parts if any
+            if binary_data:
+                for key, (data, mime_type) in binary_data.items():
+                    tool_response_content.parts.append(types.Part.from_bytes(data=data, mime_type=mime_type))
+
+            tool_responses_contents.append(tool_response_content)
+
+
+        contents.extend(tool_responses_contents) # Append ALL tool responses to contents
+
+
+        if tool_behavior == ToolBehavior.USE_AND_DONE:
+            self.logger.debug("Tool behavior: USE_AND_DONE. Returning tool results.")
+            return json.dumps([tc.parts[0].function_response.response for tc in tool_responses_contents]) # Return tool results
+
+        elif tool_behavior == ToolBehavior.USE_AND_ANALYZE_OUTPUT_AND_DONE:
+            self.logger.debug("Tool behavior: USE_AND_ANALYZE_OUTPUT_AND_DONE. Making final LLM call.")
+            response = await self.client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=config
+            )
+            return response.candidates[0].content.parts[0].text
+
+        elif tool_behavior == ToolBehavior.KEEP_USING_UNTIL_DONE:
+            self.logger.debug("Tool behavior: KEEP_USING_UNTIL_DONE. Making another LLM call with updated contents.")
+            response = await self.client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=config
+            )
+
+            if hasattr(response.candidates[0].content.parts[0], 'function_call') and response.candidates[0].content.parts[0].function_call is not None:
+                contents.append(response.candidates[0].content)
+                return await self._handle_tool_calls(
                     contents=contents,
-                    config=types.GenerateContentConfig(**kwargs)
+                    tool_behavior=tool_behavior,
+                    config=config,
+                    kwargs=kwargs
                 )
-                return response.text
-            
-            else:  # KEEP_USING_UNTIL_DONE
-                response = await self.client.models.generate_content(
-                    model=self.model,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        tools=kwargs.get("tools")
-                    )
-                )
-                
-                # Check if there's another function call
-                if hasattr(response.candidates[0].content.parts[0], 'function_call'):
-                    return await self._handle_tool_calls(
-                        message=response.candidates[0].content,
-                        messages=messages,
-                        tool_behavior=tool_behavior,
-                        kwargs=kwargs
-                    )
-                    
-                return response.text
-                
-        except Exception as e:
-            self.logger.error(f"Tool call failed: {str(e)}", exc_info=True)
-            return json.dumps({"error": str(e)})
+
+            return response.candidates[0].content.parts[0].text

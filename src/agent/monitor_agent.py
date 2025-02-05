@@ -164,7 +164,7 @@ class MonitorAgent(BaseAgent):
             try:
                 # Directly add entity using database interface
                 result = await self.db.add_entity(
-                    "activity_raw", 
+                    "activity_raw",
                     storage_data,
                 )
 
